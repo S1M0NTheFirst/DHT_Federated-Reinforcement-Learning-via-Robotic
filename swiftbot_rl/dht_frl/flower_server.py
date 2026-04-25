@@ -38,7 +38,7 @@ logging.getLogger("flwr").setLevel(logging.WARNING)
 
 # --- CONFIG ---
 N_CLIENTS       = 8
-N_ROUNDS        = 30     # enough rounds for policy to converge
+N_ROUNDS        = 50     # 50 × 20 = 1000 tasks per worker, matches baseline TOTAL_TASKS
 SERVER_ADDRESS  = "0.0.0.0:8080"
 RESULT_DIR      = os.path.join(os.path.dirname(__file__), "results")
 STATE_DIM       = 15

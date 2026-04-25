@@ -20,7 +20,7 @@ sys.path.insert(0, "/app/robot")
 from task_generator import SyntheticTaskGenerator
 
 TOTAL_TASKS           = 1000
-FORCED_MIGRATION_TASKS = set(range(50, 1050, 20))
+FORCED_MIGRATION_TASKS = set(range(200, 1050, 20))
 
 
 if __name__ == "__main__":

@@ -30,9 +30,9 @@ MAX_RETRIES   = 10
 RETRY_DELAY   = 5
 STATE_DIM     = 15
 TASKS_PER_ROUND = 20        # tasks each robot does between FL sync rounds
-TOTAL_ROUNDS    = 30        # matches server N_ROUNDS
-# Forced migration at these task counts (50 per experiment = 50 events for stats)
-FORCED_MIGRATION_TASKS = set(range(50, 1050, 20))
+TOTAL_ROUNDS    = 50        # matches server N_ROUNDS
+# Forced migration delayed to task 200 — gives PPO ~5 updates + ~10 FL rounds first
+FORCED_MIGRATION_TASKS = set(range(200, 1050, 20))
 
 shutdown_requested = False
 
