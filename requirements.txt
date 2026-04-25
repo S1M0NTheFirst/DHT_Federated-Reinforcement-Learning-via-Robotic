@@ -1,0 +1,29 @@
+# requirements.txt
+# Federated Learning Dependencies
+
+# Core federated learning
+flwr==1.11.1
+
+# Deep learning (installed separately via torch index in Dockerfile)
+# torch==2.1.0
+# torchaudio==2.1.0
+
+# Data processing
+pandas==2.0.3
+numpy==1.24.4
+
+# Metrics
+jiwer==3.0.3
+
+# Visualization
+matplotlib==3.8.0
+seaborn==0.13.0
+
+# DHT and orchestration
+kademlia==2.2.3
+docker==7.0.0
+
+# Utilities
+argparse
+psutil==5.9.6
+nvidia-ml-py==13.590.48
