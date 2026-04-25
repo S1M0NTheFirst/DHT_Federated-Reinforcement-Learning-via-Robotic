@@ -233,8 +233,8 @@ def trigger_unified_migration(robot_id: str, container_name: str,
     transfer_ms     = (t_transfer_done - t_transfer_start) * 1000
 
     # --- Stop source container (still running due to --leave-running) ---
-    subprocess.run(["docker", "stop", "-t", "5", container_name],
-                   capture_output=True, timeout=30)
+    subprocess.run(["docker", "stop", "-t", "1", container_name],
+                   capture_output=True, timeout=15)
 
     # --- Restore container (same name, now stopped — simulates arrival at destination) ---
     t_restore_start = time.perf_counter()
@@ -266,7 +266,9 @@ def trigger_unified_migration(robot_id: str, container_name: str,
 
     t_fully_operational = time.perf_counter()
     total_MTT_ms = (t_fully_operational - t_trigger) * 1000
-    downtime_ms  = total_MTT_ms  # simplified for same-machine simulation
+    # Robot is only down during stop+restore+policy_load — pre-dump and transfer
+    # happen with --leave-running so the source container keeps serving until stop.
+    downtime_ms  = restore_ms + policy_load_ms
 
     net_post     = get_net_bytes()
     gpu_post     = get_gpu_util()

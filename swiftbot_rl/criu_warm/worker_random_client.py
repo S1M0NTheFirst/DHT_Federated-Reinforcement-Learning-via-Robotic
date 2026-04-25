@@ -62,9 +62,10 @@ if __name__ == "__main__":
         success_hist.append(1 if success else 0)
 
         sr = sum(success_hist[-10:]) / max(len(success_hist[-10:]), 1)
+        # task_counter+1 = count of completed tasks (matches DHT+FRL post-increment semantics)
         r.lpush("task_logs", json.dumps({
             "robot_id":               robot_id,
-            "task_counter":           task_counter,
+            "task_counter":           task_counter + 1,
             "fl_round":               0,
             "task_type":              task["task_type"],
             "complexity":             task["complexity"],
