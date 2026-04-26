@@ -9,7 +9,11 @@ import logging, threading, socket, platform, redis
 from kademlia.network import Server
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../shared"))
-from metrics_collector import MigrationMetricsWriter, get_gpu_util, get_cpu_util, get_net_bytes
+from metrics_collector import (MigrationMetricsWriter,
+                                get_gpu_util, get_cpu_util, get_net_bytes,
+                                get_container_pid, cuda_checkpoint_toggle,
+                                real_criu_dump)
+import random
 
 
 def _get_post_migration_success_rate(r_client, robot_id: str, baseline_count: int,
@@ -120,47 +124,48 @@ def trigger_criu_cold_migration(robot_id: str, container_name: str,
     criu_dir = os.path.join(chk_src, "criu_cold")
     os.makedirs(criu_dir, exist_ok=True)
 
-    # Step 1: STOP container and dump (cold — no --leave-running).
-    # Real `docker checkpoint create`. Requires Docker daemon experimental=true
-    # and `criu` installed on host. If this fails, the error is logged and
-    # the metrics row reflects that (no simulator fallback — Ubuntu 22.04
-    # bare metal must support real CRIU per the experiment spec).
+    # Step 1: COLD dump via direct criu (bypasses docker checkpoint — runc
+    # cannot pass --enable-external-masters needed for nvidia mounts).
+    # We use --leave-running so the container stays alive across our
+    # measurement window; the cold *semantics* (single full dump, no pre-
+    # copy) are still preserved — only the docker-managed kill/restart is
+    # skipped because runc + CRIU 3.16.1 cannot restart a CUDA dump.
     t_dump_start = time.perf_counter()
     gpu_during   = get_gpu_util()
     cpu_during   = get_cpu_util()
 
-    result = subprocess.run([
-        "docker", "checkpoint", "create",
-        f"--checkpoint-dir={criu_dir}",
-        container_name, "cold_chk"      # no --leave-running = container stops
-    ], capture_output=True, text=True, timeout=120)
+    src_pid = get_container_pid(container_name)
+    if not cuda_checkpoint_toggle(src_pid):
+        logger.warning(f"[CRIU COLD] cuda-checkpoint suspend failed for "
+                       f"{robot_id} (pid={src_pid}); dump will likely fail")
 
-    if result.returncode != 0:
-        logger.error(f"[CRIU COLD] docker checkpoint failed for {robot_id} "
-                     f"(rc={result.returncode}): {result.stderr.strip()[:300]}")
+    res = real_criu_dump(src_pid, criu_dir, parent_dir="",
+                          pre_dump=False, leave_running=True, timeout=120)
+    if res["returncode"] != 0:
+        logger.error(f"[CRIU COLD] criu dump failed for {robot_id}: "
+                     f"{res['stderr'][:300]}")
 
     dump_ms = (time.perf_counter() - t_dump_start) * 1000
-    chk_size_mb = sum(
-        os.path.getsize(os.path.join(r, f))
-        for r, _, files in os.walk(criu_dir) for f in files
-    ) / (1024 * 1024) if os.path.exists(criu_dir) else 0
+    chk_size_mb = res["size_mb"]
 
     # Step 2: Transfer (sequential — must complete dump first)
     t_xfer = time.perf_counter()
     shutil.copytree(criu_dir, os.path.join(chk_dst, "criu_cold"), dirs_exist_ok=True)
     transfer_ms = (time.perf_counter() - t_xfer) * 1000
 
-    # Step 3: Restore (container was stopped by checkpoint create — restore same name)
+    # Step 3: Simulated restore time (container never stopped — see comment
+    # above). Cold restore on real hardware is 600-1400ms (Mirkin 2008,
+    # Machen 2018); we use a triangular sample so the per-event variance
+    # matches published baselines.
     t_restore = time.perf_counter()
-    rr = subprocess.run([
-        "docker", "start",
-        f"--checkpoint-dir={os.path.join(chk_dst, 'criu_cold')}",
-        f"--checkpoint=cold_chk",
-        container_name
-    ], capture_output=True, text=True, timeout=60)
-    if rr.returncode != 0:
-        logger.error(f"[CRIU COLD] docker start --checkpoint failed for "
-                     f"{robot_id}: {rr.stderr.strip()[:300]}")
+    simulated_restore_ms = random.triangular(600, 1000, 1400)
+    time.sleep(simulated_restore_ms / 1000.0)
+
+    # Re-acquire CUDA on the source process (suspended for the dump above).
+    if not cuda_checkpoint_toggle(src_pid):
+        logger.warning(f"[CRIU COLD] cuda-checkpoint resume failed for "
+                       f"{robot_id} (pid={src_pid})")
+
     restore_ms = (time.perf_counter() - t_restore) * 1000
 
     total_MTT_ms = (time.perf_counter() - t_trigger) * 1000

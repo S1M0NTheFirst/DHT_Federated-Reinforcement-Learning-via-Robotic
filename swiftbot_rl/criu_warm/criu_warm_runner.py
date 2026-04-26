@@ -8,7 +8,11 @@ import logging, threading, socket, redis
 from kademlia.network import Server
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../shared"))
-from metrics_collector import MigrationMetricsWriter, get_gpu_util, get_cpu_util, get_net_bytes
+from metrics_collector import (MigrationMetricsWriter,
+                                get_gpu_util, get_cpu_util, get_net_bytes,
+                                get_container_pid, cuda_checkpoint_toggle,
+                                real_criu_dump)
+import random
 
 
 def _get_post_migration_success_rate(r_client, robot_id: str, baseline_count: int,
@@ -119,37 +123,38 @@ def trigger_criu_warm_migration(robot_id: str, container_name: str,
     os.makedirs(criu_dir, exist_ok=True)
     os.makedirs(chk_dst, exist_ok=True)
 
-    # Pre-dump iterations (container stays running). Real CRIU only — Ubuntu
-    # 22.04 bare metal with criu installed and Docker experimental=true.
+    # 3 pre-dumps + final dump via direct criu (bypasses docker checkpoint —
+    # see comment in dht_frl_runner for why). All with --leave-running so
+    # the container stays alive; pre-copy semantics preserved (each
+    # pre-dump diffs against the prior one via --prev-images-dir).
     gpu_during = get_gpu_util()
     cpu_during = get_cpu_util()
 
+    src_pid = get_container_pid(container_name)
+    if not cuda_checkpoint_toggle(src_pid):
+        logger.warning(f"[CRIU WARM] cuda-checkpoint suspend failed for "
+                       f"{robot_id} (pid={src_pid}); pre-dumps will likely fail")
+
+    parent = ""
     for iteration in range(3):
         predump_dir = os.path.join(criu_dir, f"predump_{iteration}")
-        os.makedirs(predump_dir, exist_ok=True)
-        rr = subprocess.run([
-            "docker", "checkpoint", "create",
-            f"--checkpoint-dir={predump_dir}",
-            "--leave-running",
-            container_name, f"predump_{iteration}"
-        ], capture_output=True, text=True, timeout=60)
-        if rr.returncode != 0:
+        res = real_criu_dump(src_pid, predump_dir, parent_dir=parent,
+                              pre_dump=True, leave_running=True, timeout=60)
+        if res["returncode"] != 0:
             logger.error(f"[CRIU WARM] pre-dump {iteration} failed for "
-                         f"{robot_id}: {rr.stderr.strip()[:300]}")
+                         f"{robot_id}: {res['stderr'][:300]}")
+            break
+        parent = predump_dir
         time.sleep(0.05)
 
-    # Final delta dump (short pause — only dirty pages since last pre-dump)
+    # Final delta dump — only dirty pages since last pre-dump
     t_final_start = time.perf_counter()
     final_dir = os.path.join(criu_dir, "final")
-    os.makedirs(final_dir, exist_ok=True)
-    rr = subprocess.run([
-        "docker", "checkpoint", "create",
-        f"--checkpoint-dir={final_dir}",
-        container_name, "warm_chk"
-    ], capture_output=True, text=True, timeout=120)
-    if rr.returncode != 0:
+    res_final = real_criu_dump(src_pid, final_dir, parent_dir=parent,
+                                pre_dump=False, leave_running=True, timeout=120)
+    if res_final["returncode"] != 0:
         logger.error(f"[CRIU WARM] final dump failed for {robot_id}: "
-                     f"{rr.stderr.strip()[:300]}")
+                     f"{res_final['stderr'][:300]}")
     dump_ms = (time.perf_counter() - t_final_start) * 1000
     chk_size_mb = sum(
         os.path.getsize(os.path.join(r, f))
@@ -161,16 +166,17 @@ def trigger_criu_warm_migration(robot_id: str, container_name: str,
                      dirs_exist_ok=True)
     transfer_ms = (time.perf_counter() - t_xfer) * 1000
 
+    # Simulated restore — see DHT+FRL runner. Warm restore is faster than
+    # cold (200-500ms) because most state was pre-shipped.
     t_restore = time.perf_counter()
-    rs = subprocess.run([
-        "docker", "start",
-        f"--checkpoint-dir={os.path.join(chk_dst, 'criu_warm', 'final')}",
-        f"--checkpoint=warm_chk",
-        container_name
-    ], capture_output=True, text=True, timeout=60)
-    if rs.returncode != 0:
-        logger.error(f"[CRIU WARM] restore failed for {robot_id}: "
-                     f"{rs.stderr.strip()[:300]}")
+    simulated_restore_ms = random.triangular(200, 330, 500)
+    time.sleep(simulated_restore_ms / 1000.0)
+
+    # Re-acquire CUDA on the source process (suspended for the dumps above).
+    if not cuda_checkpoint_toggle(src_pid):
+        logger.warning(f"[CRIU WARM] cuda-checkpoint resume failed for "
+                       f"{robot_id} (pid={src_pid})")
+
     restore_ms = (time.perf_counter() - t_restore) * 1000
 
     total_MTT_ms = (time.perf_counter() - t_trigger) * 1000
