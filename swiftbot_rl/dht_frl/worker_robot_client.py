@@ -278,9 +278,9 @@ if __name__ == "__main__":
     retry = 0
     while retry < MAX_RETRIES and not shutdown_requested:
         try:
-            fl.client.start_client(
+            fl.client.start_numpy_client(
                 server_address=SERVER,
-                client=client.to_client()
+                client=client
             )
             logger.info(f"[robot_{args.client_id:03d}] All FL rounds complete")
             break

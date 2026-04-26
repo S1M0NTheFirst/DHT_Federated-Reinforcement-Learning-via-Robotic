@@ -58,7 +58,11 @@ signal.signal(signal.SIGTERM, signal_handler)
 signal.signal(signal.SIGINT, signal_handler)
 
 
+_round_counter = 0
+
+
 def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
+    global _round_counter
     if not metrics:
         return {}
     total = sum(n for n, _ in metrics)
@@ -78,6 +82,19 @@ def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
     total_latency = time.time() - round_start_time
     net_now       = psutil.net_io_counters()
     server_net    = ((net_now.bytes_sent + net_now.bytes_recv) - round_start_net) / (1024 * 1024)
+
+    _round_counter += 1
+    phase = "FIT " if _round_counter % 2 == 1 else "EVAL"
+    fl_round = (_round_counter + 1) // 2
+    logger.info(
+        f"[ROUND {fl_round:>2}/{N_ROUNDS} | {phase}] "
+        f"clients={len(metrics)}/{N_CLIENTS}  "
+        f"success={success_rate:.3f}  reward={reward:+.3f}  "
+        f"loss={train_loss:.4f}  entropy={policy_entropy:.3f}  "
+        f"cpu={cpu_usage:.1f}%  gpu={gpu_usage:.0f}MB  "
+        f"net={max(net_client, server_net):.2f}MB  "
+        f"latency={total_latency:.1f}s"
+    )
 
     return {
         "mean_reward":    round(reward, 4),
@@ -164,6 +181,7 @@ def run_fedavg():
         round_start_time = time.time()
         net = psutil.net_io_counters()
         round_start_net = net.bytes_sent + net.bytes_recv
+        logger.info(f">>> Starting FL round {server_round}/{N_ROUNDS} — dispatching to {N_CLIENTS} clients...")
         return {"local_epochs": 1, "round": server_round}
 
     strategy = fl.server.strategy.FedAvg(

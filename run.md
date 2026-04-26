@@ -1,10 +1,11 @@
-##
+##conda activate swiftbot
 Step 2 — Build Docker images
 
   cd ~/swiftbot_rl
 
   # DHT+FRL image (Condition A)
   docker build -f dht_frl/Dockerfile -t swiftbot-robot:latest dht_frl/
+  # docker build -f swiftbot_rl/dht_frl/Dockerfile -t swiftbot-robot:latest swiftbot_rl/dht_frl/
 
   # Baseline image (Conditions B and C — built from swiftbot_rl/ root for multi-dir COPY)
   docker build -f criu_cold/Dockerfile -t swiftbot-baseline:latest .

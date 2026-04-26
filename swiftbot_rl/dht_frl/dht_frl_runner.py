@@ -11,6 +11,7 @@ import platform, socket, redis
 from kademlia.network import Server
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../shared"))
 from metrics_collector import MigrationMetricsWriter, get_gpu_util, get_cpu_util, get_net_bytes
+from criu_simulator import CRIUSimulator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s",
                     handlers=[logging.StreamHandler(sys.stdout)])
@@ -173,47 +174,27 @@ def trigger_unified_migration(robot_id: str, container_name: str,
             break
         time.sleep(0.2)
 
-    # --- CRIU checkpoint from HOST (Option B) ---
+    # --- Simulated CRIU unified checkpoint (warm-style, policy is payload) ---
+    # Real `docker checkpoint create` is unreliable on consumer GPUs (RTX 4080)
+    # — see SWIFTBOT_AGENT_GUIDE.md "Important CRIU Note". Container keeps
+    # running; the policy_weights.pt + replay_buffer.pkl are the real payload.
     t_dump_start = time.perf_counter()
     gpu_during   = get_gpu_util()
     cpu_during   = get_cpu_util()
 
     criu_dir = os.path.join(chk_src, "criu")
-    os.makedirs(criu_dir, exist_ok=True)
+    sim      = CRIUSimulator("unified")
+    dump_res = sim.simulate_checkpoint(robot_id, criu_dir)
+    dump_ms  = dump_res["dump_ms"]
+    chk_size_mb = dump_res["size_mb"]
 
-    criu_result = subprocess.run([
-        "docker", "checkpoint", "create",
-        f"--checkpoint-dir={criu_dir}",
-        "--leave-running",
-        container_name, "migration_chk"
-    ], capture_output=True, text=True, timeout=120)
-
-    t_dump_done    = time.perf_counter()
-    dump_ms        = (t_dump_done - t_dump_start) * 1000
-    criu_ok        = criu_result.returncode == 0
-
-    if not criu_ok:
-        logger.warning(f"  CRIU checkpoint warning: {criu_result.stderr[:200]}")
-
-    # Get checkpoint size
-    chk_size_mb = 0.0
-    if os.path.exists(criu_dir):
-        chk_size_mb = sum(
-            os.path.getsize(os.path.join(r, f))
-            for r, _, files in os.walk(criu_dir)
-            for f in files
-        ) / (1024 * 1024)
-
-    # --- Parallel transfer: CRIU checkpoint + policy + replay buffer ---
+    # --- Parallel transfer: simulated CRIU dir + real policy/replay buffer ---
     t_transfer_start = time.perf_counter()
     transfer_results = {}
 
     def transfer_criu():
-        t = time.perf_counter()
-        dst = os.path.join(chk_dst, "criu")
-        if os.path.exists(criu_dir):
-            shutil.copytree(criu_dir, dst, dirs_exist_ok=True)
-        transfer_results["criu_ms"] = (time.perf_counter() - t) * 1000
+        res = sim.simulate_transfer(criu_dir, os.path.join(chk_dst, "criu"))
+        transfer_results["criu_ms"] = res["transfer_ms"]
 
     def transfer_policy():
         t = time.perf_counter()
@@ -232,22 +213,11 @@ def trigger_unified_migration(robot_id: str, container_name: str,
     t_transfer_done = time.perf_counter()
     transfer_ms     = (t_transfer_done - t_transfer_start) * 1000
 
-    # --- Stop source container (still running due to --leave-running) ---
-    subprocess.run(["docker", "stop", "-t", "1", container_name],
-                   capture_output=True, timeout=15)
-
-    # --- Restore container (same name, now stopped — simulates arrival at destination) ---
+    # --- Simulated restore (container is left running — no real stop/start) ---
     t_restore_start = time.perf_counter()
-
-    restore_result = subprocess.run([
-        "docker", "start",
-        f"--checkpoint-dir={os.path.join(chk_dst, 'criu')}",
-        f"--checkpoint=migration_chk",
-        container_name
-    ], capture_output=True, text=True, timeout=60)
-
-    t_restore_done = time.perf_counter()
-    restore_ms     = (t_restore_done - t_restore_start) * 1000
+    restore_res     = sim.simulate_restore(criu_dir, robot_id)
+    restore_ms      = restore_res["restore_ms"]
+    t_restore_done  = time.perf_counter()
 
     # --- Signal robot to load policy (policy_load_ms measured inside container) ---
     r_client.set(f"load_policy:{robot_id}", chk_dst, ex=60)
@@ -312,6 +282,59 @@ def trigger_unified_migration(robot_id: str, container_name: str,
     }
 
 
+def live_status_thread(interval: int = 15):
+    """
+    Background thread — every `interval` seconds, prints a snapshot of every
+    robot's task counter, last success rate, and current FL round, plus any
+    pending migration requests. Pulls everything from Redis (no docker exec).
+    """
+    logger.info(f"[Status] Live status thread started (every {interval}s)")
+    time.sleep(interval)
+    while True:
+        try:
+            rows = []
+            # Read most recent task_log per robot
+            latest: dict = {}
+            for raw in r_client.lrange("task_logs", 0, 500):
+                try:
+                    e = json.loads(raw)
+                except Exception:
+                    continue
+                rid = e.get("robot_id")
+                if rid and rid not in latest:
+                    latest[rid] = e
+                if len(latest) >= TOTAL_CLIENTS:
+                    break
+
+            for cid in range(TOTAL_CLIENTS):
+                rid = f"robot_{cid:03d}"
+                e   = latest.get(rid)
+                if not e:
+                    rows.append(f"  {rid}: <no tasks yet>")
+                    continue
+                rows.append(
+                    f"  {rid}: tasks={e.get('task_counter',0):>4}  "
+                    f"fl_round={e.get('fl_round',0):>2}  "
+                    f"success10={e.get('success_rate_rolling10',0):.2f}  "
+                    f"reward={e.get('reward',0):+.2f}  "
+                    f"entropy={e.get('policy_entropy',0):.2f}  "
+                    f"step={e.get('training_step',0)}"
+                )
+
+            pending_mig = r_client.keys("migration_request:robot_*")
+            mig_str = f"  pending_migrations={len(pending_mig)}" if pending_mig else ""
+
+            logger.info("=" * 78)
+            logger.info(f"[Status] Live snapshot{mig_str}")
+            for line in rows:
+                logger.info(line)
+            logger.info("=" * 78)
+
+        except Exception as e:
+            logger.error(f"[Status] Error: {e}")
+        time.sleep(interval)
+
+
 def migration_monitor_thread():
     """
     Background thread — watches Redis for migration requests from containers.
@@ -356,6 +379,10 @@ async def main():
     # Start migration monitor as background thread
     monitor = threading.Thread(target=migration_monitor_thread, daemon=True)
     monitor.start()
+
+    # Start live status reporter
+    status = threading.Thread(target=live_status_thread, args=(15,), daemon=True)
+    status.start()
 
     # Create 4 DHT nodes (matches original dht_asr_optimized.py structure)
     nodes = (
