@@ -7,11 +7,10 @@ Run this from Ubuntu host:
     python3 dht_frl_runner.py
 """
 import asyncio, docker, os, sys, time, json, subprocess, shutil, logging, threading
-import platform, socket, redis
+import platform, socket, redis, pickle
 from kademlia.network import Server
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../shared"))
 from metrics_collector import MigrationMetricsWriter, get_gpu_util, get_cpu_util, get_net_bytes
-from criu_simulator import CRIUSimulator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s",
                     handlers=[logging.StreamHandler(sys.stdout)])
@@ -174,27 +173,62 @@ def trigger_unified_migration(robot_id: str, container_name: str,
             break
         time.sleep(0.2)
 
-    # --- Simulated CRIU unified checkpoint (warm-style, policy is payload) ---
-    # Real `docker checkpoint create` is unreliable on consumer GPUs (RTX 4080)
-    # — see SWIFTBOT_AGENT_GUIDE.md "Important CRIU Note". Container keeps
-    # running; the policy_weights.pt + replay_buffer.pkl are the real payload.
+    # --- Real CRIU unified checkpoint (warm-style, container left running) ---
+    # Pre-dump while running so the source container keeps serving until the
+    # final stop. The policy_weights.pt + replay_buffer.pkl are saved by the
+    # container BEFORE this runs (gated on `ready_for_criu`) so they are
+    # captured implicitly in the bind-mounted /checkpoints volume on disk.
     t_dump_start = time.perf_counter()
     gpu_during   = get_gpu_util()
     cpu_during   = get_cpu_util()
 
     criu_dir = os.path.join(chk_src, "criu")
-    sim      = CRIUSimulator("unified")
-    dump_res = sim.simulate_checkpoint(robot_id, criu_dir)
-    dump_ms  = dump_res["dump_ms"]
-    chk_size_mb = dump_res["size_mb"]
+    os.makedirs(criu_dir, exist_ok=True)
 
-    # --- Parallel transfer: simulated CRIU dir + real policy/replay buffer ---
+    # 3 pre-dumps with --leave-running, then final dump that stops container.
+    for iteration in range(3):
+        predump_dir = os.path.join(criu_dir, f"predump_{iteration}")
+        os.makedirs(predump_dir, exist_ok=True)
+        rr = subprocess.run([
+            "docker", "checkpoint", "create",
+            f"--checkpoint-dir={predump_dir}",
+            "--leave-running",
+            container_name, f"predump_{iteration}"
+        ], capture_output=True, text=True, timeout=60)
+        if rr.returncode != 0:
+            logger.error(f"[MIGRATION] pre-dump {iteration} failed for "
+                         f"{robot_id}: {rr.stderr.strip()[:300]}")
+        time.sleep(0.05)
+
+    # Final delta dump — short pause, only dirty pages since last pre-dump
+    final_dir = os.path.join(criu_dir, "final")
+    os.makedirs(final_dir, exist_ok=True)
+    rr = subprocess.run([
+        "docker", "checkpoint", "create",
+        f"--checkpoint-dir={final_dir}",
+        container_name, "unified_chk"
+    ], capture_output=True, text=True, timeout=120)
+    if rr.returncode != 0:
+        logger.error(f"[MIGRATION] final dump failed for {robot_id}: "
+                     f"{rr.stderr.strip()[:300]}")
+
+    dump_ms = (time.perf_counter() - t_dump_start) * 1000
+    chk_size_mb = sum(
+        os.path.getsize(os.path.join(r, f))
+        for r, _, files in os.walk(criu_dir) for f in files
+    ) / (1024 * 1024) if os.path.exists(criu_dir) else 0
+
+    # --- Parallel transfer: CRIU dir + policy/replay_buffer files ---
+    # The unified migration's defining feature: the RL state moves alongside
+    # the container state, in parallel.
     t_transfer_start = time.perf_counter()
     transfer_results = {}
 
     def transfer_criu():
-        res = sim.simulate_transfer(criu_dir, os.path.join(chk_dst, "criu"))
-        transfer_results["criu_ms"] = res["transfer_ms"]
+        t = time.perf_counter()
+        shutil.copytree(criu_dir, os.path.join(chk_dst, "criu"),
+                         dirs_exist_ok=True)
+        transfer_results["criu_ms"] = (time.perf_counter() - t) * 1000
 
     def transfer_policy():
         t = time.perf_counter()
@@ -213,26 +247,65 @@ def trigger_unified_migration(robot_id: str, container_name: str,
     t_transfer_done = time.perf_counter()
     transfer_ms     = (t_transfer_done - t_transfer_start) * 1000
 
-    # --- Simulated restore (container is left running — no real stop/start) ---
-    t_restore_start = time.perf_counter()
-    restore_res     = sim.simulate_restore(criu_dir, robot_id)
-    restore_ms      = restore_res["restore_ms"]
-    t_restore_done  = time.perf_counter()
+    # --- Count replay buffer entries that arrived at destination ---
+    # This is the headline metric for the paper: CRIU baselines transfer no
+    # replay buffer (always 0), unified migration restores the trained
+    # experience. Counted at destination, not source, so we measure what
+    # actually arrived after the network transfer.
+    replay_buffer_entries = 0
+    rb_dst = os.path.join(chk_dst, "replay_buffer.pkl")
+    if os.path.exists(rb_dst):
+        try:
+            with open(rb_dst, "rb") as _f:
+                rb_obj = pickle.load(_f)
+            replay_buffer_entries = len(rb_obj) if hasattr(rb_obj, "__len__") else 0
+        except Exception as e:
+            logger.warning(f"  Could not count replay buffer entries: {e}")
 
-    # --- Signal robot to load policy (policy_load_ms measured inside container) ---
+    # --- Real restore: docker start --checkpoint at destination ---
+    # Container was stopped by the final checkpoint create. Restoring the
+    # same container name with the destination checkpoint dir.
+    t_restore_start = time.perf_counter()
+    rs = subprocess.run([
+        "docker", "start",
+        f"--checkpoint-dir={os.path.join(chk_dst, 'criu', 'final')}",
+        f"--checkpoint=unified_chk",
+        container_name
+    ], capture_output=True, text=True, timeout=60)
+    if rs.returncode != 0:
+        logger.error(f"[MIGRATION] restore failed for {robot_id}: "
+                     f"{rs.stderr.strip()[:300]}")
+    restore_ms     = (time.perf_counter() - t_restore_start) * 1000
+    t_restore_done = time.perf_counter()
+
+    # --- Signal robot: migration done + policy ready to load ---
+    # ORDER MATTERS. The worker is blocked on `migration_done`. It only loads
+    # the policy AFTER receiving that signal. Previously we waited for
+    # `first_bid_after_migration` BEFORE setting `migration_done`, which
+    # deadlocked: worker waits for done, runner waits for first_bid → 30s
+    # timeout fires every migration, inflating total_MTT_ms by ~30s.
+    # Set load_policy first (so it's ready when worker reads it), then
+    # migration_done to unblock the worker, then wait for confirmation.
     r_client.set(f"load_policy:{robot_id}", chk_dst, ex=60)
+    r_client.set(f"migration_done:{robot_id}", "1", ex=60)
 
     # Wait for robot to confirm policy loaded and first bid submitted
     deadline_bid = time.time() + 30
     policy_load_ms = 0.0
+    got_first_bid = False
     while time.time() < deadline_bid:
         data = r_client.get(f"first_bid_after_migration:{robot_id}")
         if data:
             info = json.loads(data)
             policy_load_ms = float(info.get("policy_load_ms", 0))
             r_client.delete(f"first_bid_after_migration:{robot_id}")
+            got_first_bid = True
             break
         time.sleep(0.1)
+
+    if not got_first_bid:
+        logger.warning(f"[MIGRATION] {robot_id}: no first_bid_after_migration "
+                       f"signal in 30s — policy_load_ms recorded as 0")
 
     t_fully_operational = time.perf_counter()
     total_MTT_ms = (t_fully_operational - t_trigger) * 1000
@@ -244,9 +317,6 @@ def trigger_unified_migration(robot_id: str, container_name: str,
     gpu_post     = get_gpu_util()
     cpu_post     = get_cpu_util()
     net_bytes    = net_post - net_pre
-
-    # Signal migration complete to robot
-    r_client.set(f"migration_done:{robot_id}", "1", ex=60)
 
     # Measure post-migration success rate (wait for 10 new tasks after migration)
     success_rate_post = _get_post_migration_success_rate(robot_id, task_counter_pre, n=10)
@@ -278,6 +348,7 @@ def trigger_unified_migration(robot_id: str, container_name: str,
         "cpu_util_post_migration":     cpu_post,
         "network_bytes_transferred":   net_bytes,
         "checkpoint_size_mb":          round(chk_size_mb, 2),
+        "replay_buffer_entries_restored": replay_buffer_entries,
         "criu_mode":                   "unified",
     }
 

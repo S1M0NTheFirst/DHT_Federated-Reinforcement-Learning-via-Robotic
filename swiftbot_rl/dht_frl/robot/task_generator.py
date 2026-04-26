@@ -53,14 +53,34 @@ class SyntheticTaskGenerator:
             "task_type": task_type,
             "complexity": round(complexity, 3),
             "duration_s": round(duration_s, 2),
-            "deadline_ms": round(duration_s * 1000 * 1.5, 1),
+            # Tight deadline (10% slack). Under contention from other containers
+            # the per-iteration loop overhead pushes some accepted tasks past it,
+            # giving PPO a real failure signal to learn from.
+            "deadline_ms": round(duration_s * 1000 * 1.1, 1),
         }
 
-    def execute(self, task_spec: dict) -> dict:
+    def execute(self, task_spec: dict, bid: float = 1.0,
+                bid_threshold: float = 0.5) -> dict:
         """
-        Actually runs the computational workload.
-        Returns result dict with status and actual latency.
+        Run the workload, gated by the policy's bid value.
+
+        bid < bid_threshold → robot DECLINES (status="declined", no work done).
+        bid >= bid_threshold → robot accepts and executes the task.
+                               success requires latency <= deadline_ms.
+
+        This makes the bid a load-bearing decision: a random policy declines
+        ~50% of tasks, while a trained PPO learns when to accept based on
+        load. Without this gate, success_rate is trivially 1.0 for everyone.
         """
+        # 1. Bid gating — the robot has to commit before doing the work
+        if bid < bid_threshold:
+            return {
+                "status": "declined",
+                "latency_ms": 0.0,
+                "deadline_ms": task_spec["deadline_ms"],
+                "bid": float(bid),
+            }
+
         t_start = time.perf_counter()
         task_type = task_spec["task_type"]
         complexity = task_spec["complexity"]
@@ -81,10 +101,12 @@ class SyntheticTaskGenerator:
                 "status": "success" if success else "timeout",
                 "latency_ms": round(latency_ms, 2),
                 "deadline_ms": task_spec["deadline_ms"],
+                "bid": float(bid),
             }
         except Exception as e:
             return {"status": "failed", "error": str(e),
-                    "latency_ms": 0, "deadline_ms": task_spec["deadline_ms"]}
+                    "latency_ms": 0, "deadline_ms": task_spec["deadline_ms"],
+                    "bid": float(bid)}
 
     def _run_gpu_task(self, complexity: float, duration_s: float):
         """Large matrix multiply on GPU — simulates perception workload."""

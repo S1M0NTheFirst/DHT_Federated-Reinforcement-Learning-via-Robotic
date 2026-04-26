@@ -23,6 +23,14 @@ TOTAL_TASKS           = 1000
 FORCED_MIGRATION_TASKS = set(range(200, 1050, 20))
 
 
+def _reward_for(status: str) -> float:
+    """Same reward shape as DHT+FRL worker so cross-condition reward
+    aggregates compare fairly. Random worker doesn't train on this — it's
+    only for the task_logs CSV / paper analysis."""
+    return {"success": 1.0, "timeout": -0.5,
+            "declined": -0.2, "failed": -1.0}.get(status, -1.0)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--client-id",      type=int, required=True)
@@ -59,7 +67,10 @@ if __name__ == "__main__":
 
         task   = task_gen.generate()
         bid    = np.random.uniform(0, 1)   # RANDOM POLICY — no learning
-        result = task_gen.execute(task)
+        # Bid gates execution. With U(0,1) bids and threshold 0.5, ~50% of
+        # tasks are declined → baseline cannot reach the success rate that a
+        # trained PPO can. This is the core difference the paper measures.
+        result = task_gen.execute(task, bid=float(bid), bid_threshold=0.5)
         success = result["status"] == "success"
         success_hist.append(1 if success else 0)
 
@@ -72,7 +83,7 @@ if __name__ == "__main__":
             "task_type":              task["task_type"],
             "complexity":             task["complexity"],
             "bid_value":              round(float(bid), 4),
-            "reward":                 1.0 if success else -1.0,
+            "reward":                 _reward_for(result["status"]),
             "status":                 result["status"],
             "exec_latency_ms":        round(result.get("latency_ms", 0), 2),
             "deadline_ms":            task["deadline_ms"],

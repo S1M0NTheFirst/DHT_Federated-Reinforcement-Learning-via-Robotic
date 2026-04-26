@@ -91,7 +91,7 @@ def weighted_average(metrics: List[Tuple[int, Metrics]]) -> Metrics:
         f"clients={len(metrics)}/{N_CLIENTS}  "
         f"success={success_rate:.3f}  reward={reward:+.3f}  "
         f"loss={train_loss:.4f}  entropy={policy_entropy:.3f}  "
-        f"cpu={cpu_usage:.1f}%  gpu={gpu_usage:.0f}MB  "
+        f"cpu={cpu_usage:.1f}%  gpu={gpu_usage:.1f}%  "
         f"net={max(net_client, server_net):.2f}MB  "
         f"latency={total_latency:.1f}s"
     )

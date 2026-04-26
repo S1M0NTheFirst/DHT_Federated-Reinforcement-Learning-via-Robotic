@@ -91,6 +91,9 @@ class RobotPPOAgent:
         self.training_step = 0
         self._last_state = None
         self._last_action = None
+        # Most-recent PPO loss — exposed to FL server as the real train_loss.
+        # 0.0 until the first _ppo_update fires.
+        self.last_loss = 0.0
 
     def get_bid(self, state: np.ndarray) -> float:
         bid = self.policy.get_bid(state)
@@ -112,6 +115,7 @@ class RobotPPOAgent:
         r_t = torch.FloatTensor(rewards)
         if r_t.std() > 1e-8:
             r_t = (r_t - r_t.mean()) / (r_t.std() + 1e-8)
+        last_total_loss = 0.0
         for _ in range(epochs):
             bids = self.policy(s_t).squeeze()
             loss = -torch.mean(r_t * bids)
@@ -124,6 +128,11 @@ class RobotPPOAgent:
             total_loss.backward()
             nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
             self.optimizer.step()
+            last_total_loss = float(total_loss.detach().item())
+        # Expose the real PPO loss to the FL server. Replaces the previous
+        # fake `1 - success_rate` proxy that always read 0 once the policy
+        # was trivially succeeding.
+        self.last_loss = last_total_loss
         self.training_step += 1
 
     def get_entropy(self) -> float:

@@ -17,6 +17,28 @@ import flwr as fl
 from collections import OrderedDict
 import redis, json
 
+# Real GPU utilization (% busy) — replaces torch.cuda.memory_allocated which
+# only reports allocated MB, not utilization. pynvml may not be available
+# inside every container, so guard the import.
+try:
+    import pynvml
+    pynvml.nvmlInit()
+    _GPU_HANDLE = pynvml.nvmlDeviceGetHandleByIndex(0)
+    _GPU_UTIL_OK = True
+except Exception:
+    _GPU_HANDLE = None
+    _GPU_UTIL_OK = False
+
+
+def _gpu_util_pct() -> float:
+    """0-100 GPU busy %. Falls back to 0 if pynvml unavailable."""
+    if not _GPU_UTIL_OK:
+        return 0.0
+    try:
+        return float(pynvml.nvmlDeviceGetUtilizationRates(_GPU_HANDLE).gpu)
+    except Exception:
+        return 0.0
+
 sys.path.insert(0, "/app/robot")
 from policy       import RobotPPOAgent, BidPolicyMLP
 from sensor       import RobotSensor
@@ -46,12 +68,24 @@ signal.signal(signal.SIGINT, signal_handler)
 
 
 def compute_reward(result: dict) -> float:
-    if result["status"] == "success":
+    """
+    Reward shaping:
+      success  : +1.0   (accepted and finished under deadline)
+      timeout  : -0.5   (accepted but missed deadline — overcommit)
+      declined : -0.2   (declined task — small penalty so policy still tries)
+      failed   : -1.0   (exception / crash)
+    The asymmetric penalty (decline < timeout) discourages always-decline
+    while still letting the policy reject when it would otherwise time out.
+    """
+    status = result["status"]
+    if status == "success":
         lat = result.get("latency_ms", 1e9)
         dl  = result.get("deadline_ms", 1e9)
         return +1.0 if lat <= dl else +0.3
-    elif result["status"] == "timeout":
+    elif status == "timeout":
         return -0.5
+    elif status == "declined":
+        return -0.2
     else:
         return -1.0
 
@@ -162,9 +196,9 @@ class RobotClient(fl.client.NumPyClient):
                     ex=60
                 )
 
-            # Get bid and execute task
+            # Get bid; bid gates whether task is actually executed
             bid    = self.agent.get_bid(state)
-            result = self.task_gen.execute(task)
+            result = self.task_gen.execute(task, bid=bid, bid_threshold=0.5)
             reward = compute_reward(result)
 
             next_state = self.sensor.read(task)
@@ -202,29 +236,34 @@ class RobotClient(fl.client.NumPyClient):
                 "task_count": self.task_counter,
             }))
 
-        # Hardware metrics
+        # Hardware metrics — gpu_usage is now real % utilization (pynvml),
+        # not allocated MB. Old metric was stuck at ~8 MB regardless of load
+        # so the fl_hardware.csv chart was a flat line.
         cpu_usage = psutil.cpu_percent()
-        gpu_usage = 0.0
-        if torch.cuda.is_available():
-            gpu_usage = torch.cuda.memory_allocated(DEVICE) / (1024 * 1024)
+        gpu_usage = _gpu_util_pct()
         net_now    = psutil.net_io_counters()
         net_mb     = (net_now.bytes_sent + net_now.bytes_recv - self.net_start) / (1024 * 1024)
         self.net_start = net_now.bytes_sent + net_now.bytes_recv
 
         mean_reward  = float(np.mean(rewards_this_round)) if rewards_this_round else 0.0
         success_rate = sum(self.success_hist[-20:]) / max(len(self.success_hist[-20:]), 1)
-        train_loss   = max(0.0, 1.0 - success_rate)  # proxy loss for server logging
+        # Real PPO total_loss from the last optimizer step (was a fake
+        # proxy `1 - success_rate` that read 0 once tasks were succeeding).
+        train_loss   = float(self.agent.last_loss)
+        train_time   = float(time.time() - t_start)
 
         logger.info(f"[{self.robot_id}] Round {fl_round}: "
                     f"tasks={self.task_counter} success={success_rate:.3f} "
-                    f"entropy={self.agent.get_entropy():.3f}")
+                    f"reward={mean_reward:+.3f} loss={train_loss:.4f} "
+                    f"entropy={self.agent.get_entropy():.3f} "
+                    f"time={train_time:.1f}s")
 
         return self.get_parameters({}), self.task_counter, {
-            "train_loss":     float(train_loss),
+            "train_loss":     train_loss,
             "mean_reward":    float(mean_reward),
             "success_rate":   float(success_rate),
             "policy_entropy": float(self.agent.get_entropy()),
-            "train_time":     float(time.time() - t_start),
+            "train_time":     train_time,
             "cpu_usage":      float(cpu_usage),
             "gpu_usage":      float(gpu_usage),
             "network_mb":     float(net_mb),
@@ -241,8 +280,7 @@ class RobotClient(fl.client.NumPyClient):
             "success_rate":    float(sr),
             "policy_entropy":  float(self.agent.get_entropy()),
             "cpu_usage":       float(psutil.cpu_percent()),
-            "gpu_usage":       float(torch.cuda.memory_allocated(DEVICE) /
-                                     (1024 * 1024)) if torch.cuda.is_available() else 0.0,
+            "gpu_usage":       _gpu_util_pct(),
         }
 
 

@@ -120,7 +120,11 @@ def trigger_criu_cold_migration(robot_id: str, container_name: str,
     criu_dir = os.path.join(chk_src, "criu_cold")
     os.makedirs(criu_dir, exist_ok=True)
 
-    # Step 1: STOP container and dump (cold — no --leave-running)
+    # Step 1: STOP container and dump (cold — no --leave-running).
+    # Real `docker checkpoint create`. Requires Docker daemon experimental=true
+    # and `criu` installed on host. If this fails, the error is logged and
+    # the metrics row reflects that (no simulator fallback — Ubuntu 22.04
+    # bare metal must support real CRIU per the experiment spec).
     t_dump_start = time.perf_counter()
     gpu_during   = get_gpu_util()
     cpu_during   = get_cpu_util()
@@ -131,9 +135,11 @@ def trigger_criu_cold_migration(robot_id: str, container_name: str,
         container_name, "cold_chk"      # no --leave-running = container stops
     ], capture_output=True, text=True, timeout=120)
 
-    dump_ms = (time.perf_counter() - t_dump_start) * 1000
+    if result.returncode != 0:
+        logger.error(f"[CRIU COLD] docker checkpoint failed for {robot_id} "
+                     f"(rc={result.returncode}): {result.stderr.strip()[:300]}")
 
-    # Get checkpoint size
+    dump_ms = (time.perf_counter() - t_dump_start) * 1000
     chk_size_mb = sum(
         os.path.getsize(os.path.join(r, f))
         for r, _, files in os.walk(criu_dir) for f in files
@@ -146,12 +152,15 @@ def trigger_criu_cold_migration(robot_id: str, container_name: str,
 
     # Step 3: Restore (container was stopped by checkpoint create — restore same name)
     t_restore = time.perf_counter()
-    subprocess.run([
+    rr = subprocess.run([
         "docker", "start",
         f"--checkpoint-dir={os.path.join(chk_dst, 'criu_cold')}",
         f"--checkpoint=cold_chk",
         container_name
-    ], capture_output=True, timeout=60)
+    ], capture_output=True, text=True, timeout=60)
+    if rr.returncode != 0:
+        logger.error(f"[CRIU COLD] docker start --checkpoint failed for "
+                     f"{robot_id}: {rr.stderr.strip()[:300]}")
     restore_ms = (time.perf_counter() - t_restore) * 1000
 
     total_MTT_ms = (time.perf_counter() - t_trigger) * 1000
@@ -190,8 +199,66 @@ def trigger_criu_cold_migration(robot_id: str, container_name: str,
         "cpu_util_post_migration":     get_cpu_util(),
         "network_bytes_transferred":   net_post - net_pre,
         "checkpoint_size_mb":          round(chk_size_mb, 2),
+        # CRIU baselines never transfer a replay buffer — that's the whole
+        # point of the comparison. Always 0 here.
+        "replay_buffer_entries_restored": 0,
         "criu_mode":                   "cold",
     }
+
+
+def live_status_thread(interval: int = 10):
+    """
+    Periodic snapshot of per-robot progress for the CRIU COLD baseline.
+    Reads the same `task_logs` list the DHT+FRL runner uses, plus a
+    monotonic counter of migrations performed in this process.
+    Mirrors the DHT+FRL `live_status_thread` so the operator sees consistent
+    output across all three conditions.
+    """
+    logger.info(f"[Status COLD] Live status thread started (every {interval}s)")
+    time.sleep(interval)
+    while True:
+        try:
+            latest: dict = {}
+            for raw in r_client.lrange("task_logs", 0, 800):
+                try:
+                    e = json.loads(raw)
+                except Exception:
+                    continue
+                rid = e.get("robot_id")
+                if rid and rid not in latest:
+                    latest[rid] = e
+                if len(latest) >= TOTAL_CLIENTS:
+                    break
+
+            rows = []
+            for cid in range(TOTAL_CLIENTS):
+                rid = f"robot_{cid:03d}"
+                e   = latest.get(rid)
+                if not e:
+                    rows.append(f"  {rid}: <no tasks yet>")
+                    continue
+                rows.append(
+                    f"  {rid}: tasks={e.get('task_counter',0):>4}  "
+                    f"status={e.get('status','?'):<8}  "
+                    f"success10={e.get('success_rate_rolling10',0):.2f}  "
+                    f"bid={e.get('bid_value',0):.2f}  "
+                    f"reward={e.get('reward',0):+.2f}"
+                )
+
+            pending = r_client.keys("migration_request:robot_*")
+            mig_done = metrics_writer._event_counter
+            extra = f"  migrations_done={mig_done}"
+            if pending:
+                extra += f"  pending={len(pending)}"
+
+            logger.info("=" * 78)
+            logger.info(f"[Status COLD] Live snapshot{extra}")
+            for line in rows:
+                logger.info(line)
+            logger.info("=" * 78)
+        except Exception as e:
+            logger.error(f"[Status COLD] Error: {e}")
+        time.sleep(interval)
 
 
 def migration_monitor_thread():
@@ -221,6 +288,7 @@ async def main():
     master_ip = get_master_ip()
     os.makedirs(CHECKPOINT_BASE, exist_ok=True)
     threading.Thread(target=migration_monitor_thread, daemon=True).start()
+    threading.Thread(target=live_status_thread, args=(10,), daemon=True).start()
     nodes = (
         [DHTNode(0, BASE_PORT)] +
         [DHTNode(i, BASE_PORT + i, ("127.0.0.1", BASE_PORT)) for i in range(1, NUM_NODES)]
