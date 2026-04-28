@@ -287,10 +287,23 @@ def trigger_unified_migration(robot_id: str, container_name: str,
                          f"Error tail: {res_final['stderr'][-400:]}")
 
     dump_ms = (time.perf_counter() - t_dump_start) * 1000
+    # Bundle size = the bytes we actually transfer over the DHT to the new
+    # host. That is policy_weights.pt + replay_buffer.pkl + manifest.json
+    # (the unified policy/buffer bundle — *not* the CRIU image, which is
+    # zero in SIMULATE mode and irrelevant to A's transport anyway).
+    bundle_files = ["policy_weights.pt", "replay_buffer.pkl", "manifest.json"]
     chk_size_mb = sum(
-        os.path.getsize(os.path.join(r, f))
-        for r, _, files in os.walk(criu_dir) for f in files
-    ) / (1024 * 1024) if os.path.exists(criu_dir) else 0
+        os.path.getsize(os.path.join(chk_src, f))
+        for f in bundle_files
+        if os.path.exists(os.path.join(chk_src, f))
+    ) / (1024 * 1024)
+    # Add the CRIU image too if it exists (real CRIU mode); in SIMULATE this
+    # contributes 0 and the bundle dominates.
+    if os.path.exists(criu_dir):
+        chk_size_mb += sum(
+            os.path.getsize(os.path.join(r, f))
+            for r, _, files in os.walk(criu_dir) for f in files
+        ) / (1024 * 1024)
 
     # --- Parallel transfer: CRIU dir + policy/replay_buffer files ---
     t_transfer_start = time.perf_counter()

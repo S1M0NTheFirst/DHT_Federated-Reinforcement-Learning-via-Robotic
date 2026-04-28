@@ -20,7 +20,13 @@ sys.path.insert(0, "/app/robot")
 from task_generator import SyntheticTaskGenerator
 
 TOTAL_TASKS           = 1000
-FORCED_MIGRATION_TASKS = set(range(200, 1050, 20))
+# Match Condition A's schedule (worker_robot_client.py) for fair comparison:
+# 5 forced migrations per robot, staggered by client_id*25 so the 8 robots
+# don't stampede the migration_monitor at the same task counter.
+_MIGRATION_SCHEDULE = [200, 400, 600, 800, 950]
+def forced_migration_tasks_for(client_id: int) -> set:
+    offset = client_id * 25
+    return {t + offset for t in _MIGRATION_SCHEDULE}
 
 
 def _reward_for(status: str) -> float:
@@ -42,6 +48,7 @@ if __name__ == "__main__":
     r          = redis.Redis(host=REDIS_HOST, decode_responses=True)
     task_gen   = SyntheticTaskGenerator(args.container_type, seed=args.client_id * 100)
     success_hist = []
+    forced_migration_tasks = forced_migration_tasks_for(args.client_id)
 
     logger.info(f"[{robot_id}] Random policy worker started (CRIU cold baseline)")
 
@@ -50,15 +57,18 @@ if __name__ == "__main__":
             break
 
         # Check for forced migration signal
-        if task_counter in FORCED_MIGRATION_TASKS:
+        if task_counter in forced_migration_tasks:
             sr = sum(success_hist[-10:]) / max(len(success_hist[-10:]), 1)
+            # TTL 600s: monitor processes migrations serially and 8 robots
+            # queued × ~5-15s/CRIU-dump > 30s — short TTLs caused the
+            # earlier "only 4 robots ever migrate" coverage gap.
             r.set(f"migration_request:{robot_id}", json.dumps({
                 "robot_id":     robot_id,
                 "success_rate": sr,
                 "task_counter": task_counter,
-            }), ex=30)
-            # Wait for migration done signal
-            deadline = time.time() + 60
+            }), ex=600)
+            # Wait up to 600s for the runner to finish the dump+restore
+            deadline = time.time() + 600
             while time.time() < deadline:
                 if r.get(f"migration_done:{robot_id}"):
                     r.delete(f"migration_done:{robot_id}")
