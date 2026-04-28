@@ -140,36 +140,43 @@ class DHTNode:
                                        f"after start (attempt {attempt+1})")
                         await asyncio.sleep(2.0)
                     if not ok:
-                        # start() refused 10x — daemon's GPU slot is poisoned
-                        # for this container. Destroy and recreate fresh.
-                        logger.warning(f"  {cname} stuck after 10 retries — "
-                                       f"destroying and recreating fresh")
+                        logger.warning(f"  {cname} SDK failed — falling back "
+                                       f"to shell docker run")
                         try:
                             container.remove(force=True)
                         except Exception:
                             pass
                         await asyncio.sleep(3.0)
+                        sh_cmd = [
+                            "docker", "run", "-d", "--name", cname,
+                            "--shm-size=4g",
+                            "-e", f"REDIS_HOST={REDIS_HOST}",
+                            "-e", "NVIDIA_VISIBLE_DEVICES=all",
+                            "-e", "PYTHONUNBUFFERED=1",
+                            "--gpus", "all",
+                            "-v", f"{CHECKPOINT_BASE}:/checkpoints",
+                            "--security-opt", "seccomp=unconfined",
+                            "--network", "host",
+                            DOCKER_IMAGE_NAME,
+                            "python3", "/app/worker_random_client.py",
+                            "--client-id", str(cid),
+                            "--container-type", ctype,
+                        ]
                         try:
-                            container = self.docker.containers.run(
-                                DOCKER_IMAGE_NAME, command=cmd, name=cname,
-                                detach=True, tty=False, shm_size="4g",
-                                environment={
-                                    "REDIS_HOST": REDIS_HOST,
-                                    "NVIDIA_VISIBLE_DEVICES": "all",
-                                    "PYTHONUNBUFFERED": "1",
-                                },
-                                device_requests=[docker.types.DeviceRequest(
-                                    count=-1, capabilities=[["gpu"]])],
-                                volumes={CHECKPOINT_BASE: {"bind": "/checkpoints", "mode": "rw"}},
-                                security_opt=["seccomp:unconfined"],
-                                network_mode="host",
-                            )
-                            await asyncio.sleep(2.0)
-                            container.reload()
-                            if container.status == "running":
-                                ok = True
-                        except Exception as re:
-                            logger.error(f"  {cname} recreate failed: {re}")
+                            sh = subprocess.run(sh_cmd, capture_output=True,
+                                                text=True, timeout=180)
+                            if sh.returncode == 0:
+                                await asyncio.sleep(3.0)
+                                container = self.docker.containers.get(cname)
+                                container.reload()
+                                if container.status == "running":
+                                    ok = True
+                                    logger.info(f"  {cname} rescued via shell")
+                            else:
+                                logger.error(f"  {cname} shell run failed: "
+                                             f"{sh.stderr[:300]}")
+                        except Exception as se:
+                            logger.error(f"  {cname} shell fallback exc: {se}")
                     if ok:
                         logger.info(f"  Started {cname} (running)")
                     else:
