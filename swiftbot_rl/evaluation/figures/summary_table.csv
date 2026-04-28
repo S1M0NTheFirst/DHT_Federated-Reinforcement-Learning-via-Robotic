@@ -1,0 +1,4 @@
+System,Mean MTT (ms),Mean downtime (ms),Mean regression (%),Policy load (ms),GPU during migration,CPU during migration,Net bytes xferred (MB)
+DHT+FRL (ours),7817.4 ± 784.2,331.3 ± 42.8,0.0 ± 0.0,1.9,0.07,0.38,0.7
+CRIU cold,4904.0 ± 3729.4,4904.0 ± 3729.4,-25.2 ± 91.0,0.0,0.04,0.06,0.2
+CRIU warm (pre-copy),67791.7 ± 11884.4,4790.3 ± 2222.8,7.5 ± 45.5,0.0,0.02,0.10,4.7
