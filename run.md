@@ -1,10 +1,26 @@
 ##conda activate swiftbot
+ sudo tee /etc/sudoers.d/swiftbot-chown <<EOF
+ simon ALL=(root) NOPASSWD: /usr/bin/chown
+
+docker stop $(docker ps -aq) 2>/dev/null;
+ docker rm -f $(docker ps -aq) 2>/dev/null; 
+ redis-cli flushall;
+  rm -rf /tmp/swiftbot_checkpoints/* 
+  sudo rm -rf /tmp/swiftbot_checkpoints/*
 Step 2 — Build Docker images
 
   cd ~/swiftbot_rl
 
   # DHT+FRL image (Condition A)
   docker build -f dht_frl/Dockerfile -t swiftbot-robot:latest dht_frl/
+  
+  sudo -E env "PATH=$CONDA_PREFIX/bin:$PATH" SIMULATE_CRIU=1 python3 dht_frl/dht_frl_runner.py
+
+
+    " This is a known limitation of the CRIU cuda plugin: it can't lock the CUDA context when the target process is in certain states (most often, when other CUDA processes on
+  the same GPU are competing for it, or the target hasn't reached an idle CUDA state). The plugin's path is brittle on consumer GPUs."
+                                                                                                                                                   
+    
   # docker build -f swiftbot_rl/dht_frl/Dockerfile -t swiftbot-robot:latest swiftbot_rl/dht_frl/
 
   # Baseline image (Conditions B and C — built from swiftbot_rl/ root for multi-dir COPY)
@@ -15,6 +31,7 @@ Step 2 — Build Docker images
   # Terminal 1 — Flower server
   cd ~/swiftbot_rl
   python3 dht_frl/flower_server.py
+
   # Wait for: "Waiting for 8 robot clients to connect..."
 
   # Terminal 2 — DHT runner

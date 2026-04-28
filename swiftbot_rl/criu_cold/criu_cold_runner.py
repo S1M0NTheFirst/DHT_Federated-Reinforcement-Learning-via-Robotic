@@ -90,7 +90,7 @@ class DHTNode:
                 os.makedirs(f"{CHECKPOINT_BASE}/robot_{cid:03d}", exist_ok=True)
                 self.docker.containers.run(
                     DOCKER_IMAGE_NAME, command=cmd, name=cname,
-                    detach=True, tty=True, shm_size="4g",
+                    detach=True, tty=False, shm_size="4g",
                     environment={
                         "REDIS_HOST": REDIS_HOST,
                         "NVIDIA_VISIBLE_DEVICES": "all",
@@ -120,9 +120,14 @@ def trigger_criu_cold_migration(robot_id: str, container_name: str,
 
     chk_src = os.path.join(CHECKPOINT_BASE, robot_id)
     chk_dst = os.path.join(CHECKPOINT_BASE, f"{robot_id}_dest")
-    os.makedirs(chk_dst, exist_ok=True)
     criu_dir = os.path.join(chk_src, "criu_cold")
+    # Wipe stale images from previous migrations of this robot.
+    if os.path.exists(criu_dir):
+        shutil.rmtree(criu_dir)
+    if os.path.exists(chk_dst):
+        shutil.rmtree(chk_dst)
     os.makedirs(criu_dir, exist_ok=True)
+    os.makedirs(chk_dst, exist_ok=True)
 
     # Step 1: COLD dump via direct criu (bypasses docker checkpoint — runc
     # cannot pass --enable-external-masters needed for nvidia mounts).

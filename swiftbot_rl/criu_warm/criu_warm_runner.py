@@ -89,7 +89,7 @@ class DHTNode:
                 os.makedirs(f"{CHECKPOINT_BASE}/robot_{cid:03d}", exist_ok=True)
                 self.docker.containers.run(
                     DOCKER_IMAGE_NAME, command=cmd, name=cname,
-                    detach=True, tty=True, shm_size="4g",
+                    detach=True, tty=False, shm_size="4g",
                     environment={
                         "REDIS_HOST": REDIS_HOST,
                         "NVIDIA_VISIBLE_DEVICES": "all",
@@ -120,6 +120,12 @@ def trigger_criu_warm_migration(robot_id: str, container_name: str,
     chk_src  = os.path.join(CHECKPOINT_BASE, robot_id)
     chk_dst  = os.path.join(CHECKPOINT_BASE, f"{robot_id}_dest")
     criu_dir = os.path.join(chk_src, "criu_warm")
+    # Wipe stale images/symlinks from previous migrations of this robot —
+    # leftover 'parent' symlinks and pagemap files crash the new chain.
+    if os.path.exists(criu_dir):
+        shutil.rmtree(criu_dir)
+    if os.path.exists(chk_dst):
+        shutil.rmtree(chk_dst)
     os.makedirs(criu_dir, exist_ok=True)
     os.makedirs(chk_dst, exist_ok=True)
 
@@ -143,6 +149,12 @@ def trigger_criu_warm_migration(robot_id: str, container_name: str,
         if res["returncode"] != 0:
             logger.error(f"[CRIU WARM] pre-dump {iteration} failed for "
                          f"{robot_id}: {res['stderr'][:300]}")
+            parent = ""
+            break
+        if not res.get("valid_parent", True):
+            logger.warning(f"[CRIU WARM] pre-dump {iteration} for {robot_id} "
+                           f"has no pages (idle); falling back to cold final dump")
+            parent = ""
             break
         parent = predump_dir
         time.sleep(0.05)
@@ -152,9 +164,17 @@ def trigger_criu_warm_migration(robot_id: str, container_name: str,
     final_dir = os.path.join(criu_dir, "final")
     res_final = real_criu_dump(src_pid, final_dir, parent_dir=parent,
                                 pre_dump=False, leave_running=True, timeout=120)
+    # FAILSAFE: any final failure → wipe and retry as a cold dump.
     if res_final["returncode"] != 0:
-        logger.error(f"[CRIU WARM] final dump failed for {robot_id}: "
-                     f"{res_final['stderr'][:300]}")
+        logger.warning(f"[CRIU WARM] final dump failed for {robot_id} "
+                       f"(parent={'set' if parent else 'unset'}); "
+                       f"falling back to cold dump. Error: {res_final['stderr'][:200]}")
+        shutil.rmtree(final_dir, ignore_errors=True)
+        res_final = real_criu_dump(src_pid, final_dir, parent_dir="",
+                                    pre_dump=False, leave_running=True, timeout=120)
+        if res_final["returncode"] != 0:
+            logger.error(f"[CRIU WARM] cold-dump fallback also failed for "
+                         f"{robot_id}: {res_final['stderr'][:300]}")
     dump_ms = (time.perf_counter() - t_final_start) * 1000
     chk_size_mb = sum(
         os.path.getsize(os.path.join(r, f))

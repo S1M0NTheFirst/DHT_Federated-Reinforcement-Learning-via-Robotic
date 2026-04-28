@@ -71,7 +71,21 @@ AMD Ryzen 9 7900X (12-core, 4.70 GHz) · NVIDIA GeForce RTX 4080 (16 GB VRAM) ·
 
 ### Important CRIU Note
 
-CRIU cannot fully checkpoint GPU memory state on consumer GPUs (RTX 4080) without additional plugins. In this project, the GPU model state is captured separately as `policy_weights.pt` (saved by the container before CRIU runs). CRIU checkpoints CPU + RAM state only. This is documented as a known limitation in Attar-Khorasani et al. 2026 and is acceptable — the policy weights file covers what CRIU misses for the RL state.
+The good news is that as of 2024, NVIDIA and the CRIU developers finally solved this. To make Federated Learning migration work, we can try two specific pieces of software acting in tandem:
+
+1. NVIDIA's cuda-checkpoint utility
+NVIDIA recently released a standalone tool specifically designed to freeze CUDA execution.
+
+    How it works: When triggered, cuda-checkpoint locks all active CUDA APIs, waits for current matrix operations to finish, and then takes everything currently sitting in your RTX 4080's VRAM and copies it back over the PCIe bus into your system's regular host RAM. Finally, it tells the GPU to release the resources.
+
+    Requirements: It requires NVIDIA Display Driver version 550 or higher (which you should already have installed on your fresh Ubuntu setup).
+
+2. The criu-cuda-plugin
+CRIU version 4.0+ introduced official support for a dynamic library plugin that talks directly to NVIDIA's tool.
+
+    How it works: When you execute a CRIU dump command, the criu-cuda-plugin acts as the middleman. It tells cuda-checkpoint to move the GPU memory into the host RAM first. Once the VRAM is safely sitting in the standard Linux memory space, CRIU does its normal job of writing that host memory to a checkpoint file on your disk.
+
+    The Restore: When you migrate the container to a new node, CRIU restores the host memory, and the plugin tells the NVIDIA driver to re-acquire the GPU and push the data back into the VRAM.
 
 ---
 

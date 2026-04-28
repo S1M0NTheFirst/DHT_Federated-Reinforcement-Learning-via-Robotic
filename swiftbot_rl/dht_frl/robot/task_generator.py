@@ -53,10 +53,13 @@ class SyntheticTaskGenerator:
             "task_type": task_type,
             "complexity": round(complexity, 3),
             "duration_s": round(duration_s, 2),
-            # Tight deadline (10% slack). Under contention from other containers
-            # the per-iteration loop overhead pushes some accepted tasks past it,
-            # giving PPO a real failure signal to learn from.
-            "deadline_ms": round(duration_s * 1000 * 1.1, 1),
+            # Deadline is calibrated to the *idle* execution time of the
+            # workload (n_iters above). Under contention from the 7 other
+            # robot containers, latency stretches past this and the task
+            # times out. A learned policy declines when its sensor reads
+            # high load, recovering success rate. Without any contention
+            # signal in the workload, regression_pct was 0 in every event.
+            "deadline_ms": round(duration_s * 1000 * 1.5, 1),
         }
 
     def execute(self, task_spec: dict, bid: float = 1.0,
@@ -109,13 +112,25 @@ class SyntheticTaskGenerator:
                     "bid": float(bid)}
 
     def _run_gpu_task(self, complexity: float, duration_s: float):
-        """Large matrix multiply on GPU — simulates perception workload."""
+        """Large matrix multiply on GPU — simulates perception workload.
+        Fixed number of matmuls (not wall-clock-bounded) so latency scales
+        with GPU contention. The previous wall-clock loop made every task
+        take exactly `duration_s` regardless of load, defeating the purpose
+        of the deadline-based success signal.
+        """
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        size = int(1000 + complexity * 3000)
+        # Smaller matrix + fewer iters so an idle 8-container system
+        # finishes well under the deadline, leaving headroom for partial
+        # contention. The previous (1000+3000*c, 8x iters) calibration
+        # always blew past the deadline → tasks always failed → PPO got
+        # only "accept=bad" gradient → policy drifted to 100% decline →
+        # spiral. Now an idle accepted task takes ~30% of duration_s, a
+        # 4-way contended one ~80%.
+        size = int(500 + complexity * 1500)
         A = torch.randn(size, size, device=device)
         B = torch.randn(size, size, device=device)
-        t = time.perf_counter()
-        while time.perf_counter() - t < duration_s:
+        n_iters = max(1, int(duration_s * 2))
+        for _ in range(n_iters):
             _ = torch.matmul(A, B)
             if device == "cuda":
                 torch.cuda.synchronize()
@@ -124,9 +139,13 @@ class SyntheticTaskGenerator:
             torch.cuda.empty_cache()
 
     def _run_cpu_task(self, complexity: float, duration_s: float):
-        """Eigenvalue decomposition on CPU — simulates planning workload."""
-        size = int(500 + complexity * 1500)
+        """Eigenvalue decomposition on CPU — simulates planning workload.
+        Fixed number of decompositions; latency scales with CPU contention.
+        Same shrink as _run_gpu_task to keep idle execution well below
+        deadline.
+        """
+        size = int(300 + complexity * 700)
         M = np.random.randn(size, size).astype(np.float32)
-        t = time.perf_counter()
-        while time.perf_counter() - t < duration_s:
+        n_iters = max(1, int(duration_s * 2))
+        for _ in range(n_iters):
             np.linalg.eigvalsh(M)

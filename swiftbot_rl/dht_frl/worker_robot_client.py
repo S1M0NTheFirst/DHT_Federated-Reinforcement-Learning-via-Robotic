@@ -53,8 +53,15 @@ RETRY_DELAY   = 5
 STATE_DIM     = 15
 TASKS_PER_ROUND = 20        # tasks each robot does between FL sync rounds
 TOTAL_ROUNDS    = 50        # matches server N_ROUNDS
-# Forced migration delayed to task 200 — gives PPO ~5 updates + ~10 FL rounds first
-FORCED_MIGRATION_TASKS = set(range(200, 1050, 20))
+# Each robot migrates 5 times. Per-robot offset prevents all 8 robots from
+# triggering CRIU simultaneously (a single migration takes ~25s; if all 8
+# fire at the same task counter, only the first 1-2 get serviced before
+# Redis migration_request keys expire — that bug produced a CSV with only
+# robot_006 events).
+_MIGRATION_SCHEDULE = [200, 400, 600, 800, 950]
+def forced_migration_tasks_for(client_id: int) -> set:
+    offset = client_id * 25
+    return {t + offset for t in _MIGRATION_SCHEDULE}
 
 shutdown_requested = False
 
@@ -70,22 +77,24 @@ signal.signal(signal.SIGINT, signal_handler)
 def compute_reward(result: dict) -> float:
     """
     Reward shaping:
-      success  : +1.0   (accepted and finished under deadline)
-      timeout  : -0.5   (accepted but missed deadline — overcommit)
-      declined : -0.2   (declined task — small penalty so policy still tries)
+      success  : +1.5   (accepted and finished under deadline)
+      timeout  : -0.3   (accepted but missed deadline — overcommit)
+      declined : -0.4   (declined task — keep below timeout penalty so the
+                         policy doesn't fall into a "always decline" spiral
+                         when the workload is briefly too heavy)
       failed   : -1.0   (exception / crash)
-    The asymmetric penalty (decline < timeout) discourages always-decline
-    while still letting the policy reject when it would otherwise time out.
+    Penalty ordering is decline < timeout < failed and success >> all,
+    so a single success can pull bids back above 0.5.
     """
     status = result["status"]
     if status == "success":
         lat = result.get("latency_ms", 1e9)
         dl  = result.get("deadline_ms", 1e9)
-        return +1.0 if lat <= dl else +0.3
+        return +1.5 if lat <= dl else +0.5
     elif status == "timeout":
-        return -0.5
+        return -0.3
     elif status == "declined":
-        return -0.2
+        return -0.4
     else:
         return -1.0
 
@@ -105,6 +114,7 @@ class RobotClient(fl.client.NumPyClient):
         self.task_gen   = task_gen
         self.client_id  = client_id
         self.robot_id   = f"robot_{client_id:03d}"
+        self.forced_migration_tasks = forced_migration_tasks_for(client_id)
         self.r          = redis_client
         self.task_counter  = 0
         self.success_hist  = []
@@ -134,7 +144,7 @@ class RobotClient(fl.client.NumPyClient):
             state = self.sensor.read(task)
 
             # Check forced migration signal from DHT orchestrator
-            if self.task_counter in FORCED_MIGRATION_TASKS:
+            if self.task_counter in self.forced_migration_tasks:
                 success_rate = (sum(self.success_hist[-10:]) /
                                 max(len(self.success_hist[-10:]), 1))
 
@@ -153,9 +163,11 @@ class RobotClient(fl.client.NumPyClient):
                     }, _f)
 
                 # 2. Tell host: policy is on disk, CRIU can run now
-                self.r.set(f"ready_for_criu:{self.robot_id}", "1", ex=60)
+                self.r.set(f"ready_for_criu:{self.robot_id}", "1", ex=600)
 
-                # 3. Request migration (runner picks this up and runs CRIU)
+                # 3. Request migration (runner picks this up and runs CRIU).
+                # TTL is 600s because the monitor processes migrations
+                # serially and 8 robots queued × ~25s/migration > 30s.
                 self.r.set(
                     f"migration_request:{self.robot_id}",
                     json.dumps({
@@ -165,11 +177,11 @@ class RobotClient(fl.client.NumPyClient):
                         "fl_round":     fl_round,
                         "trigger":      "forced_experiment_event",
                     }),
-                    ex=30
+                    ex=600
                 )
 
                 # 4. Wait for migration to complete (CRIU captures+restores here)
-                timeout = time.time() + 120
+                timeout = time.time() + 600
                 while time.time() < timeout:
                     done = self.r.get(f"migration_done:{self.robot_id}")
                     if done:
@@ -177,16 +189,37 @@ class RobotClient(fl.client.NumPyClient):
                         break
                     time.sleep(0.5)
 
-                # 5. Load policy from destination checkpoint dir
+                # 5. Load policy from destination checkpoint dir.
+                # The runner translates the host path to /checkpoints/... so
+                # this open succeeds inside the container. A missing file
+                # here means the central paper claim (policy survives
+                # migration) failed silently — log it loudly.
                 t_load = time.perf_counter()
                 load_dir = self.r.get(f"load_policy:{self.robot_id}")
+                loaded_ok = False
                 if load_dir:
                     wpath = os.path.join(load_dir, "policy_weights.pt")
                     if os.path.exists(wpath):
-                        state = torch.load(wpath, map_location=DEVICE)
-                        self.agent.policy.load_state_dict(state, strict=True)
+                        # IMPORTANT: do NOT name this `state` — that shadows
+                        # the sensor reading captured earlier in this loop
+                        # iteration, and the next get_bid(state) call below
+                        # would receive a state_dict instead of a numpy
+                        # vector → TypeError → fit() crashes → the robot
+                        # gets stuck at its first migration trigger
+                        # forever (CSV pre=1.0 / post=0.0 was caused by
+                        # this).
+                        loaded_state_dict = torch.load(wpath, map_location=DEVICE)
+                        self.agent.policy.load_state_dict(loaded_state_dict, strict=True)
                         logger.info(f"[{self.robot_id}] Policy loaded from {load_dir}")
+                        loaded_ok = True
+                    else:
+                        logger.error(f"[{self.robot_id}] POLICY LOAD FAILED — "
+                                     f"{wpath} not visible in container "
+                                     f"(load_dir from redis = {load_dir})")
                     self.r.delete(f"load_policy:{self.robot_id}")
+                else:
+                    logger.error(f"[{self.robot_id}] POLICY LOAD FAILED — "
+                                 f"no load_policy redis key set by runner")
                 policy_load_ms = (time.perf_counter() - t_load) * 1000
 
                 # 6. Confirm first bid ready — runner measures policy_load_ms from this
@@ -196,8 +229,21 @@ class RobotClient(fl.client.NumPyClient):
                     ex=60
                 )
 
-            # Get bid; bid gates whether task is actually executed
-            bid    = self.agent.get_bid(state)
+            # Get bid; bid gates whether task is actually executed.
+            # Defensive: if anything in the migration block scrambled `state`
+            # or the policy, log + recover instead of crashing fit() (which
+            # would freeze this robot at its current task counter forever).
+            try:
+                bid = self.agent.get_bid(state)
+            except Exception as _bid_err:
+                logger.error(f"[{self.robot_id}] get_bid raised {_bid_err!r} "
+                             f"on tc={self.task_counter} — re-reading state "
+                             f"and bidding 0.5 as fallback")
+                state = self.sensor.read(task)
+                try:
+                    bid = self.agent.get_bid(state)
+                except Exception:
+                    bid = 0.5
             result = self.task_gen.execute(task, bid=bid, bid_threshold=0.5)
             reward = compute_reward(result)
 

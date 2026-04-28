@@ -88,29 +88,34 @@ def real_criu_dump(pid: int, images_dir: str, parent_dir: str = "",
                     leave_running: bool = True, pre_dump: bool = False,
                     timeout: int = 120) -> dict:
     """Direct `criu dump` (or `criu pre-dump`) on a host PID.
-
-    Bypasses `docker checkpoint create` because runc 1.3.5 does not pass
-    the CRIU options needed for nvidia-container-runtime's bind mounts.
-    Calling criu directly gives us full control: we auto-discover the nvidia
-    bind mounts and declare each as --external mnt[<path>]:nvN. CRIU 3.16.1
-    has NO --enable-external-masters CLI flag — that error message is just
-    boilerplate; the actual handling is via --external in this version.
-
-    Args:
-      pid:           host PID of the container's main process
-                     (`docker inspect -f {{.State.Pid}}`)
-      images_dir:    where CRIU writes the dump images
-      parent_dir:    for incremental (warm) dumps — path to previous dump
-                     for diff'ing; empty string skips
-      leave_running: keep the process alive after dump (warm/unified)
-      pre_dump:      use `criu pre-dump` (live, no-stop) instead of `criu dump`
-
-    Returns dict: {dump_ms, returncode, stderr, size_mb}
     """
     os.makedirs(images_dir, exist_ok=True)
     subcmd = "pre-dump" if pre_dump else "dump"
+    
+    # Create a relative 'parent' symlink manually. CRIU natively looks for 
+    # a 'parent' symlink to find the previous image. By making it relative, 
+    # we ensure the entire checkpoint folder is portable and can be copied
+    # by shutil.copytree(symlinks=True) without pointing back to the source.
+    if parent_dir and os.path.exists(parent_dir):
+        parent_symlink = os.path.join(images_dir, "parent")
+        if os.path.lexists(parent_symlink):
+            os.remove(parent_symlink)
+        rel_target = os.path.relpath(parent_dir, images_dir)
+        os.symlink(rel_target, parent_symlink)
+
+    # CRIU 3.x can't dump processes that hold CUDA mmaps. CRIU 4.0+ ships a
+    # cuda plugin that talks to NVIDIA's cuda-checkpoint API and handles
+    # those mappings transparently. If the user has built 4.0+ via
+    # install_criu_cuda.sh they should set CRIU_BIN to the new binary.
+    criu_bin = os.environ.get("CRIU_BIN", "criu")
+    # Skip the internal sudo when the runner is already root. Some shell
+    # environments propagate PR_SET_NO_NEW_PRIVS (snap, sandboxed shells,
+    # bwrap), which makes `sudo -n` fail with "The 'no new privileges' flag
+    # is set". Running the whole runner under sudo avoids that path
+    # entirely; this branch keeps the cmd clean when that's the case.
+    sudo_prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
     cmd = [
-        "sudo", "-n", "criu", subcmd,
+        *sudo_prefix, criu_bin, subcmd,
         "--tree", str(pid),
         "--images-dir", images_dir,
         "--tcp-established",
@@ -118,10 +123,21 @@ def real_criu_dump(pid: int, images_dir: str, parent_dir: str = "",
         "--ext-unix-sk",
         "--manage-cgroups=soft",
     ]
+
+    # Auto-load the cuda plugin when running 4.0+. CRIU walks `--libdir`
+    # and dlopen's every .so it finds (cuda_plugin.so, amdgpu_plugin.so,
+    # …). Default libdir is /usr/lib/criu/, but install_criu_cuda.sh puts
+    # the plugin under /usr/local/lib/criu/ to avoid colliding with the
+    # apt-installed CRIU 3.16.1's directory. Override via CRIU_LIBDIR.
+    if os.environ.get("CRIU_USE_CUDA_PLUGIN", "0") == "1":
+        libdir = os.environ.get("CRIU_LIBDIR", "/usr/local/lib/criu")
+        cmd.extend(["--libdir", libdir])
+
+    if parent_dir or pre_dump:
+        cmd.append("--track-mem")
+
     if leave_running and not pre_dump:
         cmd.append("--leave-running")
-    if parent_dir:
-        cmd.extend(["--prev-images-dir", parent_dir, "--track-mem"])
 
     # Auto-declare each nvidia bind mount as an external resource.
     for i, mp in enumerate(_discover_nvidia_mounts(pid)):
@@ -130,6 +146,23 @@ def real_criu_dump(pid: int, images_dir: str, parent_dir: str = "",
     t0 = time.perf_counter()
     rr = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     dump_ms = (time.perf_counter() - t0) * 1000
+
+    # Fix permissions so the runner (when not root) can read/transfer images.
+    if os.geteuid() != 0:
+        subprocess.run(["sudo", "-n", "chown", "-R",
+                        f"{os.getuid()}:{os.getgid()}", images_dir])
+
+    # Persist full stderr/stdout to a log file alongside the images. The
+    # in-memory `stderr` field is truncated for log readability, but the
+    # truncation has bitten us before — the real CRIU error often sits past
+    # the cutoff behind a wall of harmless `Warn ...` lines.
+    try:
+        with open(os.path.join(images_dir, "criu.log"), "w") as fh:
+            fh.write(f"# cmd: {' '.join(cmd)}\n# rc={rr.returncode}\n")
+            fh.write("--- stdout ---\n"); fh.write(rr.stdout or "")
+            fh.write("\n--- stderr ---\n"); fh.write(rr.stderr or "")
+    except Exception:
+        pass
 
     size_mb = 0.0
     if os.path.exists(images_dir):
@@ -141,11 +174,32 @@ def real_criu_dump(pid: int, images_dir: str, parent_dir: str = "",
     if rr.returncode != 0:
         _log.error(f"criu {subcmd} pid={pid} failed (rc={rr.returncode}): "
                    f"{(rr.stderr or rr.stdout).strip()[:400]}")
+
+    # A pre-dump with 0 modified pages may emit pagemap-*.img but NO pages-*.img.
+    # The next dump in the chain then aborts with "No parent image found".
+    # Treat such a dump as an invalid parent so the caller breaks the chain.
+    valid_parent = True
+    if rr.returncode == 0 and pre_dump:
+        try:
+            files = os.listdir(images_dir)
+            has_pagemap = any(f.startswith("pagemap-") and f.endswith(".img") for f in files)
+            has_pages   = any(f.startswith("pages-")   and f.endswith(".img") for f in files)
+            valid_parent = has_pagemap and has_pages
+        except FileNotFoundError:
+            valid_parent = False
+
+    # Pull the LAST chunk of stderr — CRIU prints harmless `Warn ...` lines
+    # at the top, and the actual error message sits at the bottom.
+    stderr_full = (rr.stderr or "").strip()
+    stderr_tail = stderr_full[-1500:] if len(stderr_full) > 1500 else stderr_full
     return {
         "dump_ms": dump_ms,
         "returncode": rr.returncode,
-        "stderr": (rr.stderr or "").strip()[:500],
+        "stderr": stderr_tail,
+        "stderr_full": stderr_full,
+        "log_path": os.path.join(images_dir, "criu.log"),
         "size_mb": round(size_mb, 2),
+        "valid_parent": valid_parent,
     }
 
 
@@ -169,7 +223,8 @@ def cuda_checkpoint_toggle(pid: int) -> bool:
     if pid <= 0:
         return False
     binary = os.environ.get("CUDA_CHECKPOINT_BIN", "/usr/local/bin/cuda-checkpoint")
-    cmd = ["sudo", "-n", binary, "--toggle", "--pid", str(pid)]
+    sudo_prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
+    cmd = [*sudo_prefix, binary, "--toggle", "--pid", str(pid)]
     try:
         rr = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if rr.returncode != 0:

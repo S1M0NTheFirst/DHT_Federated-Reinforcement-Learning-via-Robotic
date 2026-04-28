@@ -116,13 +116,20 @@ def save_results(history):
     fit_data  = history.metrics_distributed_fit
     eval_data = history.metrics_distributed
 
-    rounds = sorted({r for k in {**fit_data, **eval_data} for r, _ in {**fit_data, **eval_data}[k]})
+    # IMPORTANT: prefer fit_data over eval_data. Both aggregators write the
+    # same set of keys (weighted_average always returns the full metric dict
+    # with 0 fallbacks); if eval wins the merge, fit-only metrics like
+    # train_loss / mean_reward / train_time get clobbered to 0 — that bug
+    # produced an entire fl_convergence.csv with train_loss=0 mean_reward=0
+    # train_time=0 even though clients reported real values.
+    merged = {**eval_data, **fit_data}
+    rounds = sorted({r for k in merged for r, _ in merged[k]})
     rows = []
     for r in rounds:
         row = {"round": r}
         for k in ["train_loss", "mean_reward", "success_rate", "policy_entropy",
                   "cpu_usage", "gpu_usage", "network_mb", "train_time", "total_latency"]:
-            val = next((v for rn, v in {**fit_data, **eval_data}.get(k, []) if rn == r), 0)
+            val = next((v for rn, v in merged.get(k, []) if rn == r), 0)
             row[k] = val
         rows.append(row)
 
