@@ -54,6 +54,11 @@ REDIS_HOST        = "localhost"
 metrics_writer = MigrationMetricsWriter("criu_cold", RESULT_DIR)
 r_client       = redis.Redis(host=REDIS_HOST, decode_responses=True)
 
+# Serializes container launches across all DHT nodes. Without this, 8
+# containers race the docker daemon for GPU device claims and 1-2 land
+# stuck in "Created" state with no error reported.
+_LAUNCH_LOCK = asyncio.Lock()
+
 
 def get_master_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -67,7 +72,10 @@ class DHTNode:
         self.port      = port
         self.bootstrap = bootstrap
         self.server    = Server()
-        self.docker    = docker.from_env()
+        # Default SDK timeout is 60s; under GPU-contention the daemon's
+        # /containers/create call can take 90-120s, throwing
+        # UnixHTTPConnectionPool Read timed out. 300s is safe.
+        self.docker    = docker.from_env(timeout=300)
 
     async def start(self, master_ip):
         await self.server.listen(self.port)
@@ -80,32 +88,99 @@ class DHTNode:
             cid   = self.node_id * CLIENTS_PER_NODE + i
             cname = f"swiftbot-criu-cold-{cid}"
             ctype = "gpu_specialist" if cid < 4 else "cpu_specialist"
-            try:
+            # Serialize across all nodes — see _LAUNCH_LOCK comment.
+            async with _LAUNCH_LOCK:
                 try:
-                    self.docker.containers.get(cname).remove(force=True)
-                except docker.errors.NotFound:
-                    pass
-                cmd = (f"python3 /app/worker_random_client.py "
-                       f"--client-id {cid} --container-type {ctype}")
-                os.makedirs(f"{CHECKPOINT_BASE}/robot_{cid:03d}", exist_ok=True)
-                self.docker.containers.run(
-                    DOCKER_IMAGE_NAME, command=cmd, name=cname,
-                    detach=True, tty=False, shm_size="4g",
-                    environment={
-                        "REDIS_HOST": REDIS_HOST,
-                        "NVIDIA_VISIBLE_DEVICES": "all",
-                        "PYTHONUNBUFFERED": "1",
-                    },
-                    device_requests=[docker.types.DeviceRequest(
-                        count=-1, capabilities=[["gpu"]])],
-                    volumes={CHECKPOINT_BASE: {"bind": "/checkpoints", "mode": "rw"}},
-                    security_opt=["seccomp:unconfined"],
-                    network_mode="host",
-                )
-                logger.info(f"  Started {cname}")
-            except Exception as e:
-                logger.error(f"  Failed {cname}: {e}")
-            await asyncio.sleep(0.5)
+                    try:
+                        self.docker.containers.get(cname).remove(force=True)
+                    except docker.errors.NotFound:
+                        pass
+                    cmd = (f"python3 /app/worker_random_client.py "
+                           f"--client-id {cid} --container-type {ctype}")
+                    os.makedirs(f"{CHECKPOINT_BASE}/robot_{cid:03d}", exist_ok=True)
+                    # Two-step launch: create() then start(). docker.run()
+                    # combines these and silently swallows start failures
+                    # under GPU contention; splitting them lets us retry
+                    # start() explicitly until the daemon accepts it.
+                    container = self.docker.containers.create(
+                        DOCKER_IMAGE_NAME, command=cmd, name=cname,
+                        tty=False, shm_size="4g",
+                        environment={
+                            "REDIS_HOST": REDIS_HOST,
+                            "NVIDIA_VISIBLE_DEVICES": "all",
+                            "PYTHONUNBUFFERED": "1",
+                        },
+                        device_requests=[docker.types.DeviceRequest(
+                            count=-1, capabilities=[["gpu"]])],
+                        volumes={CHECKPOINT_BASE: {"bind": "/checkpoints", "mode": "rw"}},
+                        security_opt=["seccomp:unconfined"],
+                        network_mode="host",
+                    )
+                    ok = False
+                    last_err = None
+                    for attempt in range(10):
+                        try:
+                            container.start()
+                        except Exception as se:
+                            last_err = se
+                            logger.warning(f"  {cname} start() attempt "
+                                           f"{attempt+1} failed: {se}")
+                            await asyncio.sleep(2.0)
+                            continue
+                        # Give the daemon a beat to actually transition.
+                        await asyncio.sleep(1.5)
+                        container.reload()
+                        if container.status == "running":
+                            ok = True; break
+                        if container.status in ("exited", "dead"):
+                            logger.error(f"  {cname} died early "
+                                         f"(status={container.status})")
+                            break
+                        logger.warning(f"  {cname} status={container.status} "
+                                       f"after start (attempt {attempt+1})")
+                        await asyncio.sleep(2.0)
+                    if not ok:
+                        # start() refused 10x — daemon's GPU slot is poisoned
+                        # for this container. Destroy and recreate fresh.
+                        logger.warning(f"  {cname} stuck after 10 retries — "
+                                       f"destroying and recreating fresh")
+                        try:
+                            container.remove(force=True)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(3.0)
+                        try:
+                            container = self.docker.containers.run(
+                                DOCKER_IMAGE_NAME, command=cmd, name=cname,
+                                detach=True, tty=False, shm_size="4g",
+                                environment={
+                                    "REDIS_HOST": REDIS_HOST,
+                                    "NVIDIA_VISIBLE_DEVICES": "all",
+                                    "PYTHONUNBUFFERED": "1",
+                                },
+                                device_requests=[docker.types.DeviceRequest(
+                                    count=-1, capabilities=[["gpu"]])],
+                                volumes={CHECKPOINT_BASE: {"bind": "/checkpoints", "mode": "rw"}},
+                                security_opt=["seccomp:unconfined"],
+                                network_mode="host",
+                            )
+                            await asyncio.sleep(2.0)
+                            container.reload()
+                            if container.status == "running":
+                                ok = True
+                        except Exception as re:
+                            logger.error(f"  {cname} recreate failed: {re}")
+                    if ok:
+                        logger.info(f"  Started {cname} (running)")
+                    else:
+                        logger.error(f"  {cname} FAILED TO REACH RUNNING — "
+                                     f"final status={container.status}, "
+                                     f"last_err={last_err}. This robot will "
+                                     f"be absent from results.")
+                except Exception as e:
+                    logger.error(f"  Failed {cname}: {e}")
+                # Stagger so the next container's GPU claim doesn't race.
+                await asyncio.sleep(2.0)
 
 
 def trigger_criu_cold_migration(robot_id: str, container_name: str,
@@ -306,11 +381,27 @@ async def main():
     await asyncio.gather(*[n.start(master_ip) for n in nodes])
     logger.info("\n[CRIU COLD] All containers running. Waiting for experiment to complete...")
     try:
+        d_client = docker.from_env(timeout=300)
         while True:
             done = sum(1 for i in range(TOTAL_CLIENTS)
                        if r_client.get(f"robot_done:robot_{i:03d}"))
-            if done >= TOTAL_CLIENTS:
-                logger.info("All robots done.")
+            # Robots whose container is dead/missing should not block the
+            # main loop — count them as "done" so the experiment exits.
+            alive = 0
+            for i in range(TOTAL_CLIENTS):
+                try:
+                    c = d_client.containers.get(f"swiftbot-criu-cold-{i}")
+                    if c.status == "running":
+                        alive += 1
+                except docker.errors.NotFound:
+                    pass
+            ghosts = TOTAL_CLIENTS - alive - done
+            if done + ghosts >= TOTAL_CLIENTS or done >= TOTAL_CLIENTS:
+                if ghosts > 0:
+                    logger.warning(f"Exiting with {ghosts} ghost robot(s) — "
+                                   f"containers never reached running state.")
+                else:
+                    logger.info("All robots done.")
                 break
             await asyncio.sleep(10)
     except KeyboardInterrupt:
