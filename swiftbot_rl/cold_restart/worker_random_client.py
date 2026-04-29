@@ -69,18 +69,14 @@ if __name__ == "__main__":
                 "success_rate": sr,
                 "task_counter": task_counter,
             }), ex=600)
-            # The runner will SIGKILL us. We just exit cleanly first if
-            # given the chance — either way, all in-RAM state (success_hist,
-            # numpy RNG state) is lost on restart. That's the whole point.
-            deadline = time.time() + 600
-            while time.time() < deadline:
-                if r.get(f"migration_done:{robot_id}"):
-                    r.delete(f"migration_done:{robot_id}")
-                    break
-                time.sleep(0.5)
-            # If we make it past the wait without being killed (shouldn't),
-            # break out so we don't double-execute this task.
-            break
+            # Sit and wait — the runner will SIGKILL this container. Do NOT
+            # exit cleanly; clean exit racing with the runner's kill caused
+            # double-migration bugs (the new worker would inherit a stale
+            # migration_request and re-trigger immediately).
+            logger.info(f"[{robot_id}] migration requested at task {task_counter}, "
+                        f"sleeping until runner kills me")
+            while True:
+                time.sleep(5)
 
         task = task_gen.generate()
         bid  = np.random.uniform(0, 1)

@@ -166,11 +166,21 @@ def trigger_cold_restart(robot_id: str, container_name: str,
     t_kill = time.perf_counter()
     try:
         c = d_client.containers.get(container_name)
-        c.kill()
+        try: c.kill()
+        except Exception: pass   # benign — worker may have exited cleanly
         c.remove(force=True)
+    except docker.errors.NotFound:
+        pass
     except Exception as e:
         logger.warning(f"  kill/remove for {container_name}: {e}")
     kill_ms = (time.perf_counter() - t_kill) * 1000
+
+    # Clear any stale migration state from the dying worker BEFORE the new
+    # container starts. Otherwise the next worker can trigger an immediate
+    # repeat migration if its restart happens to land on a forced-task tick
+    # that's still in redis from the prior life.
+    r_client.delete(f"migration_request:{robot_id}")
+    r_client.delete(f"migration_done:{robot_id}")
 
     # Step 2: launch fresh — worker reads resume_counter from redis.
     t_start = time.perf_counter()
@@ -182,7 +192,8 @@ def trigger_cold_restart(robot_id: str, container_name: str,
     total_MTT_ms = (time.perf_counter() - t_trigger) * 1000
     net_post = get_net_bytes()
 
-    r_client.set(f"migration_done:{robot_id}", "1", ex=60)
+    # Don't set migration_done — the worker we'd be signalling is already
+    # dead. The new worker reads resume_counter and starts fresh.
 
     success_rate_post = _get_post_migration_success_rate(
         r_client, robot_id, task_counter_pre, n=10)

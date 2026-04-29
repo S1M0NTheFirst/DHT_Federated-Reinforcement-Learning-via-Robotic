@@ -13,7 +13,7 @@ Step 2 — Build Docker images
 
   # DHT+FRL image (Condition A)
   docker build -f dht_frl/Dockerfile -t swiftbot-robot:latest dht_frl/
-  
+
   sudo -E env "PATH=$CONDA_PREFIX/bin:$PATH" SIMULATE_CRIU=1 python3 dht_frl/dht_frl_runner.py
 
 
@@ -59,6 +59,11 @@ Step 2 — Build Docker images
   python3 criu_warm/criu_warm_runner.py
 
   redis-cli flushall
+
+  # RUN for Docker checkpoin
+  sudo -E env "PATH=$CONDA_PREFIX/bin:$PATH" python3 docker_checkpoint/docker_checkpoint_runner.py  
+  # RUN for Cold_restart
+  sudo -E env "PATH=$CONDA_PREFIX/bin:$PATH" python3 cold_restart/cold_restart_runner.py
 
   Step 6 — Generate paper figures
 
