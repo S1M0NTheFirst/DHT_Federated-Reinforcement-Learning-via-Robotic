@@ -51,16 +51,15 @@ DEVICE        = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 MAX_RETRIES   = 10
 RETRY_DELAY   = 5
 STATE_DIM     = 15
-TASKS_PER_ROUND = 20        # tasks each robot does between FL sync rounds
-TOTAL_ROUNDS    = 50        # matches server N_ROUNDS
-# Each robot migrates 5 times. Per-robot offset prevents all 8 robots from
-# triggering CRIU simultaneously (a single migration takes ~25s; if all 8
-# fire at the same task counter, only the first 1-2 get serviced before
-# Redis migration_request keys expire — that bug produced a CSV with only
-# robot_006 events).
+TASKS_PER_ROUND = int(os.environ.get("TASKS_PER_ROUND", "20"))
+TOTAL_ROUNDS    = int(os.environ.get("TOTAL_FL_ROUNDS", "50"))
+# Each robot migrates 5 times. Per-robot offset prevents all robots from
+# triggering CRIU simultaneously. Workstation default = 25 (8 robots).
+# Cluster sets MIGRATION_OFFSET=10 to fit 20 robots inside 1200 tasks.
 _MIGRATION_SCHEDULE = [200, 400, 600, 800, 950]
+_MIGRATION_OFFSET   = int(os.environ.get("MIGRATION_OFFSET", "25"))
 def forced_migration_tasks_for(client_id: int) -> set:
-    offset = client_id * 25
+    offset = client_id * _MIGRATION_OFFSET
     return {t + offset for t in _MIGRATION_SCHEDULE}
 
 shutdown_requested = False
