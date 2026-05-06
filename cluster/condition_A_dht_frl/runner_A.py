@@ -244,6 +244,7 @@ def main() -> int:
     # Apptainer does not inherit host env vars — APPTAINERENV_FOO=bar in the
     # host env propagates to FOO=bar inside the container. (SINGULARITYENV_*
     # included for compat with older singularity-based installs.)
+    pylibs_host = os.path.join(cfg.img_dir, "pylibs")
     flower_env = (
         f"APPTAINERENV_REDIS_HOST={cfg.redis_host} "
         f"APPTAINERENV_REDIS_PORT={cfg.redis_port} "
@@ -251,17 +252,20 @@ def main() -> int:
         f"APPTAINERENV_N_ROUNDS={cfg.total_fl_rounds} "
         f"APPTAINERENV_FLOWER_BIND=0.0.0.0:{cfg.flower_port} "
         f"APPTAINERENV_PYTHONUNBUFFERED=1 "
+        f"APPTAINERENV_PYTHONPATH=/pylibs:/app "
         f"SINGULARITYENV_REDIS_HOST={cfg.redis_host} "
         f"SINGULARITYENV_REDIS_PORT={cfg.redis_port} "
         f"SINGULARITYENV_N_CLIENTS={cfg.num_clients} "
         f"SINGULARITYENV_N_ROUNDS={cfg.total_fl_rounds} "
         f"SINGULARITYENV_FLOWER_BIND=0.0.0.0:{cfg.flower_port} "
         f"SINGULARITYENV_PYTHONUNBUFFERED=1 "
+        f"SINGULARITYENV_PYTHONPATH=/pylibs:/app "
     )
     flower_cmd = (
         f"cd {cfg.swiftbot_root}/dht_frl && "
         f"nohup env {flower_env} apptainer exec --nv "
         f"  --bind {cfg.swiftbot_root}:/app "
+        f"  --bind {pylibs_host}:/pylibs "
         f"  {cfg.img_dir}/{IMAGE} "
         f"  python3 /app/dht_frl/flower_server.py "
         f"  > {cfg.run_log_dir}/flower_server.log 2>&1 &"

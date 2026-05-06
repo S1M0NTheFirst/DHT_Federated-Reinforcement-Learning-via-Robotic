@@ -162,6 +162,10 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
     # version) is the APPTAINERENV_FOO=bar / SINGULARITYENV_FOO=bar prefix
     # mechanism: set them in the host env via `env`, apptainer strips the
     # prefix and exports the rest inside the container.
+    # pylibs/ is the host dir build_images.sh populated via `pip --target`.
+    # We bind it at /pylibs and prepend to PYTHONPATH so `import flwr` etc.
+    # resolve to those packages (the .sif itself only has torch+cuda).
+    pylibs_host = os.path.join(cfg.img_dir, "pylibs")
     env_pairs = {
         "REDIS_HOST":       cfg.redis_host,
         "REDIS_PORT":       cfg.redis_port,
@@ -171,6 +175,7 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
         "TOTAL_TASKS":      cfg.total_tasks,
         "TOTAL_FL_ROUNDS":  cfg.total_fl_rounds,
         "PYTHONUNBUFFERED": 1,
+        "PYTHONPATH":       "/pylibs:/app",
     }
     if extra_env:
         env_pairs.update(extra_env)
@@ -191,6 +196,7 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
         f"apptainer instance start --nv "
         f"  --bind {cfg.swiftbot_root}:/app "
         f"  --bind {chk}:/checkpoints "
+        f"  --bind {pylibs_host}:/pylibs "
         f"  {cfg.img_dir}/{image} {inst} && "
         f"sleep 3 && "
         f"nohup env {env_prefix} apptainer exec instance://{inst} "

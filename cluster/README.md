@@ -16,7 +16,8 @@ conditions as the workstation experiment, but:
 ```
 cluster/
   apptainer/
-    robot.def       baseline.def       build_images.sh
+    build_images.sh   robot.sif         baseline.sif (→ robot.sif)
+    pylibs/           (host site-packages, bind-mounted at /pylibs)
   common/
     cluster_config.sh   cluster_lib.sh
     cluster_runner.py   baseline_runner_base.py
@@ -46,15 +47,25 @@ The default beach ID is `029822154` — change it in
 file.
 
 1. Upload the two folders so they land at the paths above.
-2. Build the two apptainer images (each ~3 GB; takes ~20 min):
+2. Pull the apptainer image and install Python deps (~10 min, no root needed):
    ```bash
    cd ~/cluster/apptainer
    bash build_images.sh
    ```
-   If `--fakeroot` isn't enabled for your account the script falls back to
-   `--remote` (Sylabs cloud build, requires `apptainer remote login`). If
-   both fail, ask `ITS-HPCSupport@csulb.edu` to enable user-namespace
-   fakeroot mappings.
+   This script does NOT use `apptainer build` (which would need fakeroot or
+   the now-removed `--remote` cloud builds). Instead it:
+   - `apptainer pull`s a prebuilt PyTorch+CUDA image from Docker Hub →
+     `robot.sif` (`baseline.sif` is a symlink to it),
+   - runs `pip install --target=pylibs/` from inside the container to drop
+     `flwr`, `kademlia`, `stable-baselines3`, etc. into a host directory,
+   - the runner bind-mounts `pylibs/` into every robot at `/pylibs` and
+     prepends it to `PYTHONPATH`.
+
+   Re-run the script anytime to refresh packages. To force a clean reinstall,
+   delete `pylibs/.installed_v1` (or the whole `pylibs/` dir).
+
+   `criu` cannot be pip-installed and must be available system-wide on the
+   compute nodes. If it isn't, Conditions C/D auto-fall-back to SIMULATE.
 3. Confirm Redis works on a compute node:
    ```bash
    ssh n034 "redis-cli ping"   # → PONG
