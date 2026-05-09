@@ -1,0 +1,23 @@
+2026-05-08 20:04:58,386 - [robot_015] Random policy worker started (Cold Restart baseline)
+2026-05-08 20:04:59,826 - [robot_015] Tasks: 0/1200 success_rate=1.000
+2026-05-08 20:08:27,303 - [robot_015] Tasks: 100/1200 success_rate=0.500
+2026-05-08 20:14:05,972 - [robot_015] Tasks: 200/1200 success_rate=0.600
+2026-05-08 20:17:20,547 - [robot_015] Tasks: 300/1200 success_rate=0.200
+2026-05-08 20:18:03,561 - [robot_015] migration requested at task 350, sleeping until runner kills me
+2026-05-08 20:18:16,264 - [robot_015] Resuming after cold restart at task 351 (NO state preserved — random policy fresh)
+2026-05-08 20:19:07,820 - [robot_015] Tasks: 400/1200 success_rate=0.300
+2026-05-08 20:22:09,934 - [robot_015] Tasks: 500/1200 success_rate=0.400
+2026-05-08 20:23:26,958 - [robot_015] migration requested at task 550, sleeping until runner kills me
+2026-05-08 20:23:36,120 - [robot_015] Resuming after cold restart at task 551 (NO state preserved — random policy fresh)
+2026-05-08 20:23:41,705 - [robot_015] Tasks: 600/1200 success_rate=0.500
+2026-05-08 20:23:45,600 - [robot_015] Tasks: 700/1200 success_rate=0.300
+2026-05-08 20:23:47,590 - [robot_015] migration requested at task 750, sleeping until runner kills me
+2026-05-08 20:24:01,997 - [robot_015] Resuming after cold restart at task 751 (NO state preserved — random policy fresh)
+2026-05-08 20:24:36,900 - [robot_015] Tasks: 800/1200 success_rate=0.300
+2026-05-08 20:24:59,338 - [robot_015] Tasks: 900/1200 success_rate=0.400
+2026-05-08 20:25:06,710 - [robot_015] migration requested at task 950, sleeping until runner kills me
+2026-05-08 20:25:17,670 - [robot_015] Resuming after cold restart at task 951 (NO state preserved — random policy fresh)
+2026-05-08 20:25:41,126 - [robot_015] Tasks: 1000/1200 success_rate=0.300
+2026-05-08 20:26:22,405 - [robot_015] migration requested at task 1100, sleeping until runner kills me
+2026-05-08 20:26:36,106 - [robot_015] Resuming after cold restart at task 1101 (NO state preserved — random policy fresh)
+2026-05-08 20:26:47,688 - [robot_015] Complete.

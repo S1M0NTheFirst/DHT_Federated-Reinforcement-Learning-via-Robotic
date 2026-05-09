@@ -2,33 +2,31 @@
 #MSUB -N SwiftBot_C_CriuCold
 #MSUB -W group_list=hpc2-coe-users
 #MSUB -l walltime=03:00:00
-#MSUB -l nodes=n034.cluster.pssclabs.com:ppn=8+n035.cluster.pssclabs.com:ppn=8+n036.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n005.cluster.pssclabs.com:ppn=8+n006.cluster.pssclabs.com:ppn=8+n016.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 set -uo pipefail
 CONDITION="condition_C_criu_cold"
-HERE="$(cd "$(dirname "$0")" && pwd)"
-source "$HERE/../common/cluster_config.sh"
-source "$HERE/../common/cluster_lib.sh"
+CLUSTER_ROOT="${CLUSTER_ROOT:-$HOME/cluster}"
+HERE="$CLUSTER_ROOT/$CONDITION"
+source "$CLUSTER_ROOT/common/cluster_config.sh"
+source "$CLUSTER_ROOT/common/cluster_lib.sh"
 
-# Probe whether real CRIU is usable on a compute node. If not, force
-# SIMULATE so the runner doesn't waste 100 events failing.
-detect_criu() {
-    if ssh -n -o ConnectTimeout=5 "$CLIENT_NODE_1" "command -v criu >/dev/null 2>&1 && criu check --extra >/dev/null 2>&1"; then
-        echo ">>> criu OK on $CLIENT_NODE_1" | tee -a "$RUNNER_LOG"
-        export SIMULATE_CRIU=0
-    else
-        echo ">>> criu NOT usable on $CLIENT_NODE_1 — forcing SIMULATE_CRIU=1" | tee -a "$RUNNER_LOG"
-        export SIMULATE_CRIU=1
-    fi
-}
+# Condition C uses application-level checkpointing (torch.save/load), not
+# kernel CRIU — see cluster/README.md "Known limitations". No criu probe
+# needed.
 
 setup_run_dirs "$CONDITION"
+cleanup_and_exit() {
+    cleanup_all_nodes
+    exit "${1:-0}"
+}
+trap 'cleanup_and_exit 130' INT
+trap 'cleanup_and_exit 143' TERM
 trap 'cleanup_all_nodes' EXIT
 
 pick_alive_nodes || exit 1
 start_redis_on_server || exit 1
-detect_criu
 
 source "$CONDA_BASE/bin/activate" "$CONDA_ENV"
 export PYTHONUNBUFFERED=1
@@ -36,10 +34,10 @@ export PYTHONPATH="$CLUSTER_ROOT:${PYTHONPATH:-}"
 export SERVER_NODE CLIENT_NODE_1 CLIENT_NODE_2
 export REDIS_HOST="$SERVER_NODE"
 export RESULTS_DIR="$RESULTS_ROOT/$CONDITION"
-export CONDITION="criu_cold"
+export CONDITION="criu_cold"   # disk path component (kept for git continuity)
 mkdir -p "$RESULTS_DIR"
 
-echo ">>> Launching runner_C.py (SIMULATE_CRIU=$SIMULATE_CRIU)" | tee -a "$RUNNER_LOG"
+echo ">>> Launching runner_C.py (app-level checkpointing)" | tee -a "$RUNNER_LOG"
 python3 -u "$HERE/runner_C.py" 2>&1 | tee -a "$RUNNER_LOG"
 RC=${PIPESTATUS[0]}
 echo ">>> runner_C.py exited rc=$RC" | tee -a "$RUNNER_LOG"

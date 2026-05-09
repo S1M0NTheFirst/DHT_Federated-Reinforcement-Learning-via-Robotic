@@ -44,16 +44,35 @@ setup_run_dirs() {
 #   CLIENT_NODE_2   = third alive
 # Aborts if fewer than 3 alive nodes.
 pick_alive_nodes() {
+    # Diagnostics: show exactly what PBS gave us before any sort/uniq.
+    echo ">>> PBS_NODEFILE=$PBS_NODEFILE" | tee -a "$RUNNER_LOG"
+    echo ">>> raw PBS_NODEFILE contents:" | tee -a "$RUNNER_LOG"
+    cat "$PBS_NODEFILE" | sed 's/^/    /' | tee -a "$RUNNER_LOG"
+    local self_fqdn=$(hostname -f)
+    local self_short=$(hostname -s)
+    echo ">>> self hostname: $self_fqdn (short: $self_short)" | tee -a "$RUNNER_LOG"
+    export SELF_NODE="$self_fqdn"
+
     local raw=($(cat "$PBS_NODEFILE" | sort | uniq))
     echo "Testing SSH on assigned nodes: ${raw[*]}" | tee -a "$RUNNER_LOG"
     ALIVE_NODES=()
     for n in "${raw[@]}"; do
-        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
-               "$n" "echo alive" >/dev/null 2>&1; then
+        # The local node can't SSH to itself on this cluster (sshd closes the
+        # connection). Trust ourselves — we know we're running.
+        if [[ "$n" == "$self_fqdn" || "$n" == "$self_short" || \
+              "$n" == "${self_short}."* ]]; then
+            ALIVE_NODES+=("$n")
+            echo "  $n LOCAL (self) — included" | tee -a "$RUNNER_LOG"
+            continue
+        fi
+        local ssh_err
+        ssh_err=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
+                      "$n" "echo alive" 2>&1)
+        if [[ "$ssh_err" == "alive" ]]; then
             ALIVE_NODES+=("$n")
             echo "  $n ALIVE" | tee -a "$RUNNER_LOG"
         else
-            echo "  $n DEAD — dropped" | tee -a "$RUNNER_LOG"
+            echo "  $n DEAD — dropped (ssh said: ${ssh_err:-<empty>})" | tee -a "$RUNNER_LOG"
         fi
     done
     if [[ ${#ALIVE_NODES[@]} -lt 3 ]]; then
@@ -69,37 +88,95 @@ pick_alive_nodes() {
     echo "Client #2: $CLIENT_NODE_2" | tee -a "$RUNNER_LOG"
 }
 
-# Start an apptainer-hosted Redis on the server node, listening on REDIS_PORT.
-# Logs to $SERVER_LOG. Caller waits for redis-cli ping to return PONG.
+# Start Redis on the server node as a TRACKED bash background SSH process.
+#
+# IMPORTANT — do not revert to `ssh -f` / `nohup ... &` patterns. Those
+# double-detach the remote redis-server from the job's process tree, which
+# is what caused the orphaned-container incident the cluster admin asked us
+# to fix. The new pattern:
+#
+#   - SSH runs in the FOREGROUND of its own bash subshell.
+#   - bash backgrounds the SSH (`&`), so SSH is a child of the run_X.sh shell.
+#   - The remote command uses `exec redis-server …` so redis-server replaces
+#     the bash that sshd spawned. When SSH dies (because run_X.sh exits or is
+#     killed by MOAB), sshd sends SIGHUP to redis-server, killing it.
+#   - REDIS_SSH_PID is exported so cleanup_all_nodes can `kill` it explicitly.
 start_redis_on_server() {
-    echo ">>> Starting Redis on $SERVER_NODE:$REDIS_PORT" | tee -a "$RUNNER_LOG"
-    # Apptainer Redis: pull from docker hub via apptainer's docker bootstrap.
-    # We reuse baseline.sif which has redis-cli; the redis-server binary is
-    # installed via the bootstrap image's apt pkg (we'll need it). To avoid
-    # depending on that, run native redis-server on the head node — every
-    # cluster node has redis-server installed as part of the base image
-    # (verified by `redis-cli ping` in run_fldht.sh).
-    ssh -n "$SERVER_NODE" "pkill -9 -u \$USER -x redis-server || true; sleep 1"
-    # Note the escaped $! — we want the pid of the redis-server backgrounded
-    # in the *remote* shell, not in this local shell.
-    ssh -n -f "$SERVER_NODE" "
-        nohup redis-server --bind 0.0.0.0 --port $REDIS_PORT --protected-mode no \
-              --maxmemory 4gb --maxmemory-policy allkeys-lru \
-              > $RUN_LOG_DIR/redis.log 2>&1 < /dev/null &
-        echo \$! > $RUN_LOG_DIR/redis.pid
-    "
-    # Wait for it to be reachable. Try `redis-cli` if installed on the head
-    # node; otherwise fall back to a Python ping (conda env has the redis
-    # package). This avoids a hard dependency on the redis CLI being in PATH.
+    local self_fqdn=$(hostname -f)
+    local self_short=$(hostname -s)
+    local is_local="no"
+    if [[ "$SERVER_NODE" == "$self_fqdn" || "$SERVER_NODE" == "$self_short" || \
+          "$SERVER_NODE" == "${self_short}."* ]]; then
+        is_local="yes"
+    fi
+    echo ">>> Starting Redis on $SERVER_NODE:$REDIS_PORT (local=$is_local)" \
+        | tee -a "$RUNNER_LOG"
+
+    # Pre-clean any stale redis on the server node.
+    if [[ "$is_local" == "yes" ]]; then
+        pkill -9 -u "$USER" -x redis-server 2>/dev/null || true
+    else
+        ssh -n -o BatchMode=yes -o ConnectTimeout=10 "$SERVER_NODE" \
+            "pkill -9 -u \$USER -x redis-server 2>/dev/null || true; sleep 1" \
+            || true
+    fi
+    sleep 1
+
+    if [[ "$is_local" == "yes" ]]; then
+        # Local launch — backgrounded by this bash shell so it dies with the
+        # job. No SSH needed (can't ssh to self on this cluster anyway).
+        # Use full path to redis-server because this function is called from
+        # run_*.sh BEFORE `conda activate`, so redis-server isn't on PATH.
+        # Note: base env's binaries live at $CONDA_BASE/bin, while non-base
+        # envs are at $CONDA_BASE/envs/<name>/bin.
+        local env_bin
+        if [[ "$CONDA_ENV" == "base" ]]; then
+            env_bin="$CONDA_BASE/bin"
+        else
+            env_bin="$CONDA_BASE/envs/$CONDA_ENV/bin"
+        fi
+        local redis_bin="$env_bin/redis-server"
+        "$redis_bin" --bind 0.0.0.0 --port "$REDIS_PORT" --protected-mode no \
+                     --maxmemory 4gb --maxmemory-policy allkeys-lru \
+            > "$RUN_LOG_DIR/redis.log" 2>&1 < /dev/null &
+        export REDIS_SSH_PID=$!
+        echo "$REDIS_SSH_PID" > "$RUN_LOG_DIR/redis_ssh.pid"
+        echo ">>> Redis local PID=$REDIS_SSH_PID (bin=$redis_bin)" | tee -a "$RUNNER_LOG"
+    else
+        # Remote launch via tracked SSH child (foreground+exec → sshd HUPs
+        # redis-server when SSH closes).
+        # Non-interactive SSH does NOT source ~/.bashrc, so redis-server (in
+        # the conda env) isn't on PATH. Source conda explicitly before exec.
+        ssh -o BatchMode=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+            -n "$SERVER_NODE" \
+            "source $CONDA_BASE/bin/activate $CONDA_ENV && \
+             exec redis-server --bind 0.0.0.0 --port $REDIS_PORT --protected-mode no \
+                              --maxmemory 4gb --maxmemory-policy allkeys-lru" \
+            > "$RUN_LOG_DIR/redis.log" 2>&1 < /dev/null &
+        export REDIS_SSH_PID=$!
+        echo "$REDIS_SSH_PID" > "$RUN_LOG_DIR/redis_ssh.pid"
+        echo ">>> Redis SSH child PID=$REDIS_SSH_PID" | tee -a "$RUNNER_LOG"
+    fi
+
+    # Wait for redis to be reachable. Use full paths because conda is not yet
+    # activated when this function runs. Base env path differs from non-base.
+    local _env_bin
+    if [[ "$CONDA_ENV" == "base" ]]; then
+        _env_bin="$CONDA_BASE/bin"
+    else
+        _env_bin="$CONDA_BASE/envs/$CONDA_ENV/bin"
+    fi
+    local redis_cli="$_env_bin/redis-cli"
+    local py_bin="$_env_bin/python3"
     local i
     for i in {1..30}; do
-        if command -v redis-cli >/dev/null 2>&1; then
-            if redis-cli -h "$SERVER_NODE" -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+        if [[ -x "$redis_cli" ]]; then
+            if "$redis_cli" -h "$SERVER_NODE" -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
                 echo ">>> Redis ready (via redis-cli)" | tee -a "$RUNNER_LOG"
                 return 0
             fi
-        else
-            if python3 -c "import redis; r=redis.Redis(host='$SERVER_NODE',port=$REDIS_PORT,socket_connect_timeout=1); print(r.ping())" 2>/dev/null | grep -q True; then
+        elif [[ -x "$py_bin" ]]; then
+            if "$py_bin" -c "import redis; r=redis.Redis(host='$SERVER_NODE',port=$REDIS_PORT,socket_connect_timeout=1); print(r.ping())" 2>/dev/null | grep -q True; then
                 echo ">>> Redis ready (via python3)" | tee -a "$RUNNER_LOG"
                 return 0
             fi
@@ -114,24 +191,79 @@ start_redis_on_server() {
 # every alive node, and flush Redis. Idempotent — safe to call from EXIT trap
 # even if pick_alive_nodes never ran.
 cleanup_all_nodes() {
-    echo ">>> Cleanup: stopping apptainer instances + workers on all nodes" \
-        | tee -a "$RUNNER_LOG"
+    echo ">>> Cleanup: tearing down all SSH children + remote processes" \
+        | tee -a "$RUNNER_LOG" 2>/dev/null
+    # 1. Kill local tracked SSH children FIRST. As each one dies, sshd on the
+    # remote node sends SIGHUP to its child (apptainer-exec / redis-server),
+    # which terminates cleanly. This is the orderly shutdown path.
+    if [[ -n "${REDIS_SSH_PID:-}" ]]; then
+        kill "$REDIS_SSH_PID" 2>/dev/null || true
+    fi
+    # Any other SSH children of this script (e.g. backgrounded probes).
+    pkill -P $$ -f '^ssh ' 2>/dev/null || true
+
+    # Give sshd a moment to deliver SIGHUP to remote commands.
+    sleep 2
+
+    # 2. Belt-and-suspenders: pkill anything that survived the HUP on each
+    # node. We do this for every node we know about, not just nodes in our
+    # job — covers the case where a previous job on the same nodes left
+    # debris that this job inherited.
     local nodes=("${ALIVE_NODES[@]:-}")
     if [[ ${#nodes[@]} -eq 0 ]]; then
         nodes=($(cat "${PBS_NODEFILE:-/dev/null}" 2>/dev/null | sort | uniq))
     fi
+    local self_fqdn=$(hostname -f)
+    local self_short=$(hostname -s)
+    local cleanup_script='
+        apptainer instance list 2>/dev/null | awk "NR>1 {print \$1}" | while read inst; do
+            apptainer instance stop -s KILL "$inst" 2>/dev/null || true
+        done
+        pkill -TERM -u $USER -f worker_robot_client 2>/dev/null || true
+        pkill -TERM -u $USER -f worker_random_client 2>/dev/null || true
+        pkill -TERM -u $USER -f worker_app_checkpoint 2>/dev/null || true
+        pkill -TERM -u $USER -f flower_server.py 2>/dev/null || true
+        sleep 2
+        pkill -9 -u $USER -f worker_robot_client 2>/dev/null || true
+        pkill -9 -u $USER -f worker_random_client 2>/dev/null || true
+        pkill -9 -u $USER -f worker_app_checkpoint 2>/dev/null || true
+        pkill -9 -u $USER -f flower_server.py 2>/dev/null || true
+        pkill -9 -u $USER -x apptainer 2>/dev/null || true
+        pkill -9 -u $USER -x redis-server 2>/dev/null || true
+        rm -rf /tmp/swiftbot_* 2>/dev/null || true
+    '
     for n in "${nodes[@]}"; do
         [[ -z "$n" ]] && continue
-        ssh -n -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$n" "
-            apptainer instance list 2>/dev/null | awk 'NR>1 {print \$1}' | while read inst; do
-                apptainer instance stop \"\$inst\" 2>/dev/null || true
-            done
-            pkill -9 -u \$USER -x apptainer 2>/dev/null || true
-            pkill -9 -u \$USER -f worker_robot_client 2>/dev/null || true
-            pkill -9 -u \$USER -f worker_random_client 2>/dev/null || true
-            pkill -9 -u \$USER -x redis-server 2>/dev/null || true
-            rm -rf /tmp/swiftbot_*  2>/dev/null || true
-        " 2>/dev/null || true
+        # Self can't SSH to itself on this cluster — run cleanup locally.
+        if [[ "$n" == "$self_fqdn" || "$n" == "$self_short" || \
+              "$n" == "${self_short}."* ]]; then
+            bash -c "$cleanup_script" 2>/dev/null || true
+        else
+            ssh -n -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+                -o BatchMode=yes "$n" "$cleanup_script" 2>/dev/null || true
+        fi
     done
-    echo ">>> Cleanup complete" | tee -a "$RUNNER_LOG"
+
+    # 3. Final verification — log what's left so the admin doesn't have to ask.
+    echo ">>> Post-cleanup verification:" | tee -a "$RUNNER_LOG" 2>/dev/null
+    for n in "${nodes[@]}"; do
+        [[ -z "$n" ]] && continue
+        local leftover
+        if [[ "$n" == "$self_fqdn" || "$n" == "$self_short" || \
+              "$n" == "${self_short}."* ]]; then
+            leftover=$(pgrep -u "$USER" -af 'apptainer|worker_|redis-server' \
+                2>/dev/null | head -5)
+        else
+            leftover=$(ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$n" \
+                "pgrep -u \$USER -af 'apptainer|worker_|redis-server' 2>/dev/null | head -5" \
+                2>/dev/null)
+        fi
+        if [[ -n "$leftover" ]]; then
+            echo "  $n: STILL RUNNING:" | tee -a "$RUNNER_LOG" 2>/dev/null
+            echo "$leftover" | tee -a "$RUNNER_LOG" 2>/dev/null
+        else
+            echo "  $n: clean" | tee -a "$RUNNER_LOG" 2>/dev/null
+        fi
+    done
+    echo ">>> Cleanup complete" | tee -a "$RUNNER_LOG" 2>/dev/null
 }

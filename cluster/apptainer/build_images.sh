@@ -59,7 +59,7 @@ mkdir -p "$PYLIBS"
 
 # Sentinel file: if all packages already installed, skip. Delete to force.
 SENTINEL="$PYLIBS/.installed_v1"
-if [[ -f "$SENTINEL" ]]; then
+if [[ -f "$SENTINEL" ]]; then 
     echo ">>> $PYLIBS already populated (sentinel $SENTINEL), skipping pip install"
 else
     echo ">>> Installing extra Python packages into $PYLIBS"

@@ -1,0 +1,24 @@
+2026-05-08 20:05:00,704 - [robot_016] Random policy worker started (Cold Restart baseline)
+2026-05-08 20:05:02,522 - [robot_016] Tasks: 0/1200 success_rate=1.000
+2026-05-08 20:08:04,437 - [robot_016] Tasks: 100/1200 success_rate=0.500
+2026-05-08 20:10:21,022 - [robot_016] Tasks: 200/1200 success_rate=0.300
+2026-05-08 20:12:54,795 - [robot_016] Tasks: 300/1200 success_rate=0.400
+2026-05-08 20:13:32,394 - [robot_016] migration requested at task 360, sleeping until runner kills me
+2026-05-08 20:13:41,588 - [robot_016] Resuming after cold restart at task 361 (NO state preserved — random policy fresh)
+2026-05-08 20:13:43,381 - [robot_016] Tasks: 400/1200 success_rate=0.300
+2026-05-08 20:13:47,893 - [robot_016] Tasks: 500/1200 success_rate=0.400
+2026-05-08 20:13:51,023 - [robot_016] migration requested at task 560, sleeping until runner kills me
+2026-05-08 20:14:09,310 - [robot_016] Resuming after cold restart at task 561 (NO state preserved — random policy fresh)
+2026-05-08 20:14:52,656 - [robot_016] Tasks: 600/1200 success_rate=0.400
+2026-05-08 20:17:55,419 - [robot_016] Tasks: 700/1200 success_rate=0.600
+2026-05-08 20:18:16,731 - [robot_016] migration requested at task 760, sleeping until runner kills me
+2026-05-08 20:18:40,393 - [robot_016] Resuming after cold restart at task 761 (NO state preserved — random policy fresh)
+2026-05-08 20:19:27,948 - [robot_016] Tasks: 800/1200 success_rate=0.600
+2026-05-08 20:21:30,914 - [robot_016] Tasks: 900/1200 success_rate=0.700
+2026-05-08 20:22:21,731 - [robot_016] migration requested at task 960, sleeping until runner kills me
+2026-05-08 20:22:30,330 - [robot_016] Resuming after cold restart at task 961 (NO state preserved — random policy fresh)
+2026-05-08 20:22:32,051 - [robot_016] Tasks: 1000/1200 success_rate=0.600
+2026-05-08 20:22:36,553 - [robot_016] Tasks: 1100/1200 success_rate=0.800
+2026-05-08 20:22:36,858 - [robot_016] migration requested at task 1110, sleeping until runner kills me
+2026-05-08 20:22:48,972 - [robot_016] Resuming after cold restart at task 1111 (NO state preserved — random policy fresh)
+2026-05-08 20:24:10,234 - [robot_016] Complete.

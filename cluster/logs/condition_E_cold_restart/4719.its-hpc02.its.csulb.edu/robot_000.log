@@ -1,0 +1,20 @@
+2026-05-08 20:04:29,393 - [robot_000] Random policy worker started (Cold Restart baseline)
+2026-05-08 20:04:29,698 - [robot_000] Tasks: 0/1200 success_rate=1.000
+2026-05-08 20:05:00,274 - [robot_000] Tasks: 100/1200 success_rate=0.500
+2026-05-08 20:05:45,015 - [robot_000] migration requested at task 200, sleeping until runner kills me
+2026-05-08 20:06:02,902 - [robot_000] Resuming after cold restart at task 201 (NO state preserved — random policy fresh)
+2026-05-08 20:09:13,027 - [robot_000] Tasks: 300/1200 success_rate=0.700
+2026-05-08 20:11:16,644 - [robot_000] migration requested at task 400, sleeping until runner kills me
+2026-05-08 20:11:25,576 - [robot_000] Resuming after cold restart at task 401 (NO state preserved — random policy fresh)
+2026-05-08 20:11:29,814 - [robot_000] Tasks: 500/1200 success_rate=0.400
+2026-05-08 20:11:33,700 - [robot_000] migration requested at task 600, sleeping until runner kills me
+2026-05-08 20:11:51,876 - [robot_000] Resuming after cold restart at task 601 (NO state preserved — random policy fresh)
+2026-05-08 20:13:58,566 - [robot_000] Tasks: 700/1200 success_rate=0.700
+2026-05-08 20:16:43,389 - [robot_000] migration requested at task 800, sleeping until runner kills me
+2026-05-08 20:16:54,619 - [robot_000] Resuming after cold restart at task 801 (NO state preserved — random policy fresh)
+2026-05-08 20:17:22,091 - [robot_000] Tasks: 900/1200 success_rate=0.400
+2026-05-08 20:18:08,415 - [robot_000] migration requested at task 950, sleeping until runner kills me
+2026-05-08 20:18:48,075 - [robot_000] Resuming after cold restart at task 951 (NO state preserved — random policy fresh)
+2026-05-08 20:18:57,673 - [robot_000] Tasks: 1000/1200 success_rate=0.700
+2026-05-08 20:19:12,834 - [robot_000] Tasks: 1100/1200 success_rate=0.500
+2026-05-08 20:19:16,821 - [robot_000] Complete.

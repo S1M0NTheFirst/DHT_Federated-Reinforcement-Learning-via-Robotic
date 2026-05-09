@@ -1,138 +1,153 @@
 """
-Condition C — CRIU cold migration cross-node.
+Condition C — application-level COLD checkpoint, cross-node.
 
-For each migration:
-  1. Identify the host PID of the worker running inside the apptainer
-     instance on the source node.
-  2. `criu dump --tree <pid>` on src node → /tmp/swiftbot_<cond>/<inst>/criu/.
-     If criu is unavailable or fails (very common with rootless apptainer +
-     CUDA), we fall back to SIMULATE — sleep for a synthetic dump time and
-     proceed. The paper's headline finding is that CRIU+CUDA is brittle on
-     consumer hardware AND on shared HPC where the user lacks CAP_SYS_ADMIN.
-  3. rsync the criu image dir from src node to dst node.
-  4. `criu restore` on dst node (real CRIU mode), or just launch a fresh
-     apptainer instance there (SIMULATE mode — closer in spirit to E, but
-     with the dump+transfer overhead recorded).
+Replaces kernel CRIU (which is unavailable on this cluster — see README) with
+a torch.save / torch.load based mechanism. The worker (cluster/workers/
+worker_app_checkpoint.py) maintains a synthetic ~20 MB PyTorch state and
+dumps it on migration request; the runner rsyncs the file to the destination
+node and starts a fresh worker there with APP_RESTORE_FROM pointing at it.
 
-Cross-node: source picked from current_node(robot_id); destination is the
-other client node.
+Per-event timing:
+  trigger_to_dump_ms      = wall time worker spent in torch.save
+  dump_to_transfer_ms     = wall time of the cross-node rsync
+  transfer_to_restore_ms  = kill_src + launch_dst + worker boots + torch.load
+  policy_load_ms          = the worker's reported torch.load wall time
+  downtime_ms             = total_MTT_ms (worker is idle the entire time)
+
+CSV criu_mode column is set to "app_cold" — the value used to be
+"cold_real"/"cold_simulated" when this ran via CRIU. The folder name still
+contains "criu" for git-history continuity.
 """
-import logging, os, sys, time, random
+import json
+import logging
+import os
+import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from common.cluster_runner import (
-    ClusterConfig, apptainer_instance_name,
-    launch_robot, kill_robot, get_robot_pid,
-    remote_criu_dump, remote_criu_restore,
-    rsync_dir, ssh_run, simulate_dump_seconds,
+from common.cluster_runner import (        # noqa: E402
+    apptainer_instance_name,
+    launch_robot, kill_robot,
+    rsync_dir, ssh_run,
 )
-from common.baseline_runner_base import current_node, update_node, run_baseline
+from common.baseline_runner_base import (  # noqa: E402
+    current_node, update_node, run_baseline,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s",
                     handlers=[logging.StreamHandler(sys.stdout)])
 LOG = logging.getLogger("condC")
 
-CONDITION = "criu_cold"
+CONDITION = "app_cold_checkpoint"
 IMAGE     = "baseline.sif"
-# Use cold_restart's worker for all four baseline conditions on cluster:
-# it's the only baseline worker with resume_counter support, which we need
-# because the cluster runners always kill+relaunch the apptainer instance
-# on the dst node (a CRIU-restored process can't be tracked by apptainer
-# instance management). The criu_cold/criu_warm/docker_checkpoint workers
-# would restart from task_counter=0 after each migration → robot stuck.
-WORKER    = "cold_restart/worker_random_client.py"
+WORKER    = "/cluster_app/workers/worker_app_checkpoint.py"
+
+# Path INSIDE the container — every robot has /checkpoints bound to its own
+# per-robot host dir, so robots don't collide on this filename.
+CKPT_INSIDE = "/checkpoints/state.pt"
 
 
-def trigger_criu_cold(cfg, r, robot_id, success_rate_pre, task_counter_pre):
-    cid = int(robot_id.split("_")[1])
-    src = current_node(robot_id)
-    dst = cfg.other_node(src)
+def _wait_for_redis_key(r, key: str, *, timeout_s: float):
+    """Block until `key` exists in redis or timeout. Returns parsed JSON or None."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        raw = r.get(key)
+        if raw:
+            try:
+                return json.loads(raw)
+            except Exception:
+                return None
+        time.sleep(0.1)
+    return None
+
+
+def trigger_app_cold(cfg, r, robot_id, success_rate_pre, task_counter_pre):
+    cid  = int(robot_id.split("_")[1])
+    src  = current_node(robot_id)
+    dst  = cfg.other_node(src)
     inst = apptainer_instance_name(cid)
-    src_dir = f"{cfg.checkpoint_base}/{inst}/criu_cold"
-    dst_dir = f"{cfg.checkpoint_base}/{inst}/criu_cold"
+    src_chk_dir = f"{cfg.checkpoint_base}/{inst}"   # = /tmp/swiftbot_<cond>/<inst>
+    dst_chk_dir = f"{cfg.checkpoint_base}/{inst}"
 
-    LOG.info("[MIG] %s  %s → %s (criu cold)", robot_id, src, dst)
+    LOG.info("[MIG] %s  %s → %s (app cold)", robot_id, src, dst)
     t0 = time.perf_counter()
 
-    used_simulate = cfg.simulate_criu
-    chk_size_mb   = 0.0
-    bytes_xfer    = 0
-
-    # 1. Dump on src.
+    # 1. The worker has already written /checkpoints/state.pt and posted
+    # `app_checkpoint_done:<robot>` to Redis right before sleeping. Fetch it.
     t_dump_start = time.perf_counter()
-    if not used_simulate:
-        pid = get_robot_pid(src, cid)
-        if pid <= 0:
-            LOG.warning("[MIG] could not find pid for %s on %s; falling back to SIMULATE",
-                        robot_id, src)
-            used_simulate = True
-        else:
-            ssh_run(src, f"mkdir -p {src_dir}", timeout=10)
-            res = remote_criu_dump(src, pid, src_dir, leave_running=True, timeout=120)
-            if res["returncode"] != 0:
-                LOG.warning("[MIG] criu dump rc=%d for %s; SIMULATE fallback. tail=%s",
-                            res["returncode"], robot_id, res["stderr"][-300:])
-                used_simulate = True
-            else:
-                chk_size_mb = res["size_mb"]
-    if used_simulate:
-        time.sleep(simulate_dump_seconds())
+    dump_info = _wait_for_redis_key(r, f"app_checkpoint_done:{robot_id}",
+                                    timeout_s=30)
     t_dump_done = time.perf_counter()
-
-    # 2. Transfer.
-    t_xfer_start = time.perf_counter()
-    if not used_simulate:
-        xfer = rsync_dir(src, src_dir, dst, dst_dir, timeout=600)
-        bytes_xfer = xfer["bytes_transferred"]
+    if dump_info is None:
+        LOG.warning("[MIG] %s: app_checkpoint_done never arrived; "
+                    "proceeding anyway with whatever state.pt is on disk", robot_id)
+        save_ms     = 0.0
+        chk_size_mb = 0.0
+        rb_entries  = 0
     else:
-        # Synthetic transfer — assume 400 MB/s, ~1.4 GB process image
-        time.sleep(random.triangular(2.0, 4.0, 3.0))
+        save_ms     = dump_info.get("save_ms", 0.0)
+        chk_size_mb = dump_info.get("size_mb", 0.0)
+        rb_entries  = dump_info.get("replay_buffer_entries", 0)
+        r.delete(f"app_checkpoint_done:{robot_id}")
+
+    # 2. rsync the per-robot checkpoint dir from src to dst. Only state.pt
+    # really matters but the dir may also hold .tmp leftovers — a recursive
+    # rsync handles both and any future warm/ subdir.
+    t_xfer_start = time.perf_counter()
+    xfer = rsync_dir(src, src_chk_dir, dst, dst_chk_dir, timeout=600)
+    bytes_xfer = xfer["bytes_transferred"]
     t_xfer_done = time.perf_counter()
 
-    # 3. Restore: with real criu, restore on dst; with simulate, kill src and
-    # launch fresh on dst (matches Condition E mechanic but with overhead
-    # already accounted for in dump+transfer).
+    # 3. Kill the src instance, launch a fresh one on dst with APP_RESTORE_FROM.
     t_restore_start = time.perf_counter()
-    # Always kill src + launch fresh apptainer instance on dst, regardless
-    # of whether real CRIU "succeeded" — a CRIU-restored process lives
-    # outside any apptainer instance, so future kill_robot() / pid lookups
-    # for this robot would fail to find it. The CRIU dump+transfer overhead
-    # is still recorded above, which is what the paper actually measures.
-    if not used_simulate:
-        remote_criu_restore(dst, dst_dir,
-                            f"{cfg.run_log_dir}/criu_restore_{cid}.log",
-                            timeout=120)
-    else:
-        time.sleep(random.triangular(0.6, 1.0, 1.4))  # simulated cold restore
     kill_robot(cfg, src, cid)
-    launch_robot(cfg, dst, cid, IMAGE, WORKER)
-    t_restore_done = time.perf_counter()
-    update_node(robot_id, dst)
+    launch_robot(cfg, dst, cid, IMAGE, WORKER, extra_env={
+        "APP_CHECKPOINT_PATH": CKPT_INSIDE,
+        "APP_RESTORE_FROM":    CKPT_INSIDE,
+    })
 
+    # 4. Wait for the new worker to publish app_restore_done.
+    restore_info = _wait_for_redis_key(r, f"app_restore_done:{robot_id}",
+                                       timeout_s=120)
+    t_restore_done = time.perf_counter()
+    if restore_info is None:
+        LOG.warning("[MIG] %s: app_restore_done never arrived (worker may "
+                    "have failed to start on %s)", robot_id, dst)
+        load_ms = 0.0
+    else:
+        load_ms = restore_info.get("load_ms", 0.0)
+        r.delete(f"app_restore_done:{robot_id}")
+
+    update_node(robot_id, dst)
     r.set(f"migration_done:{robot_id}", "1", ex=600)
 
     total_ms = (t_restore_done - t0) * 1000
     return {
         "robot_id": robot_id, "src_node": src, "dst_node": dst,
-        "trigger_to_dump_ms":     (t_dump_done   - t_dump_start) * 1000,
-        "dump_to_transfer_ms":    (t_xfer_done   - t_xfer_start) * 1000,
-        "transfer_to_restore_ms": (t_restore_done- t_restore_start) * 1000,
-        "policy_load_ms": 0,
-        "downtime_ms": total_ms,
-        "total_MTT_ms": total_ms,
-        "success_rate_pre": success_rate_pre,
-        "success_rate_post": 0,
-        "regression_pct": 0,
-        "replay_buffer_entries_restored": 0,
+        "trigger_to_dump_ms":     save_ms,
+        "dump_to_transfer_ms":    (t_xfer_done   - t_xfer_start)    * 1000,
+        "transfer_to_restore_ms": (t_restore_done - t_restore_start) * 1000,
+        "policy_load_ms":         load_ms,
+        "downtime_ms":            total_ms,
+        "total_MTT_ms":           total_ms,
+        "success_rate_pre":       success_rate_pre,
+        "success_rate_post":      0,
+        "regression_pct":         0,
+        "replay_buffer_entries_restored": rb_entries,
         "network_bytes_transferred": bytes_xfer,
-        "checkpoint_size_mb": chk_size_mb,
-        "criu_mode": "cold_simulated" if used_simulate else "cold_real",
+        "checkpoint_size_mb":     chk_size_mb,
+        "criu_mode":              "app_cold",
     }
 
 
 if __name__ == "__main__":
     sys.exit(run_baseline(
-        condition=CONDITION, image=IMAGE,
-        worker_script=WORKER, trigger_fn=trigger_criu_cold,
+        condition=CONDITION,
+        image=IMAGE,
+        worker_script=WORKER,
+        trigger_fn=trigger_app_cold,
+        # Initial launch: workers have no APP_RESTORE_FROM (fresh start) but
+        # do have APP_CHECKPOINT_PATH so they know where to dump on migration.
+        initial_extra_env={"APP_CHECKPOINT_PATH": CKPT_INSIDE},
     ))

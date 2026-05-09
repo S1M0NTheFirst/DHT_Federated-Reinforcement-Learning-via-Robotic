@@ -1,4 +1,5 @@
 # SwiftBot-RL on the CSULB HPC2 cluster (Apptainer)
+The CPU and GPU vary within the cluster. From the head node, you can ssh to any node (n001 to n036) and run "lscpu" to see the CPU information. The GPU nodes are n021 and n022 on NVIDIA Tesla P100-PCIE-16GB and n034, n035, and n036 on NVIDIA GeForce RTX 3090. You can ssh to those nodes and run "nvidia-smi" for more details. We do not restrict the number of GPUs you can request for a job.
 
 Cluster port of the migration-mechanism comparison. Runs the same five
 conditions as the workstation experiment, but:
@@ -114,24 +115,43 @@ tail -F $LOGS/robot_*.log             # per-robot worker output
 The `runner.log` shows the live status snapshot every 15 s — the same
 table you saw on the workstation.
 
-## Cleanup
+## Cleanup — orphan-safe by design
 
-Each `run_X.sh` registers a `trap … EXIT` that:
-- stops every apptainer instance the job started, on every assigned node,
-- kills any leftover python workers,
-- shuts down the Redis instance on the server node,
-- removes `/tmp/swiftbot_*` on every node.
+The cluster admin warned us once that the previous setup left orphaned
+container processes that could only be cleared by rebooting the nodes. The
+current code is built so this can't happen:
 
-So whether the job exits normally, fails, or is `canceljob`'d, the cluster
-state is wiped before the next run. To verify after a job ends:
+- **No `apptainer instance start`.** Every robot is launched with
+  `apptainer exec` in the FOREGROUND of an SSH session. Apptainer is the
+  immediate child of the remote `sshd` (via `exec env …`), so when the SSH
+  connection closes, the kernel sends `SIGHUP` straight to apptainer-exec
+  and the worker dies. No persistent "Apptainer runtime parent".
+- **Every SSH connection is a tracked Popen child** of the runner Python
+  process (and the Redis SSH is a tracked bash background child of the
+  run_X.sh shell). When the runner exits — cleanly, on signal, or because
+  MOAB killed the job — those Popens die, sshd HUPs the remote commands,
+  and everything terminates.
+- **`run_X.sh` traps SIGTERM and SIGINT** in addition to EXIT. MOAB sends
+  SIGTERM before SIGKILL on walltime / `canceljob`; we catch it and run
+  `cleanup_all_nodes` before the SIGKILL window closes.
+- **`cleanup_all_nodes` is two-phase**: (1) kill local SSH children →
+  remote sshd HUPs everything; (2) ssh into each node and `pkill -TERM`
+  then `pkill -9` any remaining workers, plus `rm -rf /tmp/swiftbot_*`.
+  Then prints a verification line so the runner.log shows the final
+  process count on each node.
+
+To verify yourself after a job ends:
 
 ```bash
 for n in n034 n035 n036; do
-    ssh $n "apptainer instance list; pgrep -u $USER -af apptainer"
+    echo "=== $n ==="
+    ssh $n "pgrep -u $USER -af 'apptainer|worker_|redis-server'"
 done
 ```
 
-Should return empty lists.
+Should return empty. If it doesn't, grep `runner.log` for the
+`Post-cleanup verification:` block — it'll show what survived and on which
+node.
 
 ## Known limitations / honest framing
 
@@ -156,13 +176,24 @@ CSV outputs:
   via Redis). The number that matters here is the apptainer instance
   start+stop overhead vs Condition E.
 
-- **Conditions C / D will likely fall back to SIMULATE on this cluster.**
-  CRIU on an apptainer-launched process needs CAP_SYS_ADMIN or rootless
-  user-namespace support that's usually not configured for users on shared
-  HPCs. Each condition's `run_X.sh` probes `criu check --extra` before the
-  experiment and forces `SIMULATE_CRIU=1` if the probe fails. The CSV
-  records `criu_mode = cold_simulated` / `warm_simulated` in that case.
-  Synthesized timings model published CRIU profiles on similar workloads.
+- **Conditions C / D use application-level checkpointing, not kernel CRIU.**
+  CRIU isn't installed on the compute nodes (`which criu` returns nothing)
+  and can't be pip-installed. Instead, the cluster-local worker
+  `cluster/workers/worker_app_checkpoint.py` maintains a synthetic
+  ~20 MB PyTorch state (model + Adam optimizer moments + replay buffer +
+  RNG state) and `torch.save`s it on migration request. The runner rsyncs
+  the file to the destination node and starts a fresh worker there with
+  `APP_RESTORE_FROM` set, which `torch.load`s the state. The CSV column
+  `criu_mode` is `app_cold` for Condition C and `app_warm` for D. The
+  synthetic model is *not* used to make bidding decisions (random policy
+  unchanged); it exists purely so dump/transfer/restore numbers reflect
+  realistic state size for a small-scale RL agent.
+
+  Condition D adds a runner-side pre-copy thread that rsyncs each robot's
+  warm snapshot to the other client node every ~20 s during normal
+  operation, so the migration-window rsync hits a delta-friendly target
+  and ships fewer bytes. The bandwidth spent during normal operation is
+  logged at the end of the run as `cumulative pre-copy bytes per robot`.
 
 - **Cluster numbers are not directly comparable to workstation numbers.**
   20 robots vs 8, cross-node vs same-host, apptainer vs Docker — keep them

@@ -15,13 +15,14 @@ import logging
 import sys
 import threading
 import time
-from typing import Callable
+from typing import Any, Callable, Optional
 
 import redis
 
 from .cluster_runner import (
     ClusterConfig, MigrationMetricsWriter,
     apptainer_instance_name,
+    install_signal_handlers, terminate_all_tracked,
     launch_robot, kill_robot,
     live_status_loop, ssh_run,
 )
@@ -50,7 +51,13 @@ def run_baseline(
     image: str,
     worker_script: str,
     trigger_fn: Callable,
+    initial_extra_env: Optional[dict] = None,
+    pre_loop: Optional[Callable[[ClusterConfig, Any], None]] = None,
 ) -> int:
+    # Install SIGTERM/SIGINT handlers + atexit hook BEFORE we start any
+    # SSH/apptainer Popens, so a fast-arriving signal still cleans them up.
+    install_signal_handlers()
+
     cfg = ClusterConfig()
     LOG.info("=" * 78)
     LOG.info("Condition %s — server=%s clients=%s",
@@ -70,9 +77,15 @@ def run_baseline(
     for cid in range(cfg.num_clients):
         node = cfg.home_node_for_client(cid)
         update_node(f"robot_{cid:03d}", node)
-        launch_robot(cfg, node, cid, image, worker_script)
-        time.sleep(2)
+        launch_robot(cfg, node, cid, image, worker_script,
+                     extra_env=initial_extra_env)
+        # 3s spacing reduces SSH MaxStartups pressure when launching ~10
+        # workers per node; saw "Connection closed/timeout" without it.
+        time.sleep(3)
     LOG.info("All robots launched.")
+
+    if pre_loop is not None:
+        pre_loop(cfg, r)
 
     threading.Thread(
         target=_migration_loop,
@@ -89,6 +102,12 @@ def run_baseline(
         _wait_for_completion(cfg, r)
     except KeyboardInterrupt:
         LOG.info("Interrupted")
+    finally:
+        # Terminate every tracked SSH/apptainer Popen before we exit.
+        # The atexit hook also does this, but calling it explicitly here
+        # gives us a clear log line and guarantees cleanup even if the
+        # interpreter is shut down abnormally.
+        terminate_all_tracked(hard_after=5.0)
     LOG.info("Migration events written: %d → %s", writer.event_count, writer.path)
     return 0
 

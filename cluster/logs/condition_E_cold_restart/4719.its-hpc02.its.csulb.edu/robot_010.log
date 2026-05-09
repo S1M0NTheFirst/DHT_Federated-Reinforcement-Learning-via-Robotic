@@ -1,0 +1,6 @@
+2026-05-08 20:04:40,190 - [robot_010] Random policy worker started (Cold Restart baseline)
+2026-05-08 20:04:40,349 - [robot_010] Tasks: 0/1200 success_rate=1.000
+2026-05-08 20:05:24,749 - [robot_010] Tasks: 100/1200 success_rate=0.400
+2026-05-08 20:08:34,245 - [robot_010] Tasks: 200/1200 success_rate=0.300
+2026-05-08 20:16:41,282 - [robot_010] migration requested at task 300, sleeping until runner kills me
+Connection closed by 172.16.32.6 port 22

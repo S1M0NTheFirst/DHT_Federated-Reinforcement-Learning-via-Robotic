@@ -1,0 +1,42 @@
+145467:C 08 May 2026 20:04:00.524 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+145467:C 08 May 2026 20:04:00.524 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+145467:C 08 May 2026 20:04:00.524 * Redis version=8.6.2, bits=64, commit=f312bec6, modified=0, pid=145467, just started
+145467:C 08 May 2026 20:04:00.524 * Configuration loaded
+145467:M 08 May 2026 20:04:00.524 * monotonic clock: POSIX clock_gettime
+145467:M 08 May 2026 20:04:00.524 * Running mode=standalone, port=6379.
+145467:M 08 May 2026 20:04:00.525 * Server initialized
+145467:M 08 May 2026 20:04:00.526 * Ready to accept connections tcp
+145467:M 08 May 2026 20:04:00.526 # WARNING: Redis does not require authentication and is not protected by network restrictions. Redis will accept connections from any IP address on any network interface.
+145467:M 08 May 2026 20:04:04.347 * BGSAVE done, 0 keys saved, 0 keys skipped, 88 bytes written.
+145467:M 08 May 2026 20:04:04.349 * DB saved on disk
+145467:M 08 May 2026 20:09:05.067 * 100 changes in 300 seconds. Saving...
+145467:M 08 May 2026 20:09:05.068 * Background saving started by pid 145583
+145583:C 08 May 2026 20:09:05.073 * BGSAVE done, 15 keys saved, 0 keys skipped, 156089 bytes written.
+145583:C 08 May 2026 20:09:05.080 * DB saved on disk
+145583:C 08 May 2026 20:09:05.081 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+145467:M 08 May 2026 20:09:05.169 * Background saving terminated with success
+145467:M 08 May 2026 20:14:06.059 * 100 changes in 300 seconds. Saving...
+145467:M 08 May 2026 20:14:06.060 * Background saving started by pid 145667
+145667:C 08 May 2026 20:14:06.067 * BGSAVE done, 21 keys saved, 0 keys skipped, 337099 bytes written.
+145667:C 08 May 2026 20:14:06.075 * DB saved on disk
+145667:C 08 May 2026 20:14:06.076 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+145467:M 08 May 2026 20:14:06.161 * Background saving terminated with success
+145467:M 08 May 2026 20:19:07.081 * 100 changes in 300 seconds. Saving...
+145467:M 08 May 2026 20:19:07.081 * Background saving started by pid 145759
+145759:C 08 May 2026 20:19:07.091 * BGSAVE done, 29 keys saved, 0 keys skipped, 524164 bytes written.
+145759:C 08 May 2026 20:19:07.101 * DB saved on disk
+145759:C 08 May 2026 20:19:07.101 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+145467:M 08 May 2026 20:19:07.182 * Background saving terminated with success
+145467:M 08 May 2026 20:24:08.017 * 100 changes in 300 seconds. Saving...
+145467:M 08 May 2026 20:24:08.018 * Background saving started by pid 145859
+145859:C 08 May 2026 20:24:08.029 * BGSAVE done, 32 keys saved, 0 keys skipped, 738402 bytes written.
+145859:C 08 May 2026 20:24:08.041 * DB saved on disk
+145859:C 08 May 2026 20:24:08.041 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+145467:M 08 May 2026 20:24:08.118 * Background saving terminated with success
+145467:M 08 May 2026 20:29:09.081 * 100 changes in 300 seconds. Saving...
+145467:M 08 May 2026 20:29:09.081 * Background saving started by pid 145946
+145946:C 08 May 2026 20:29:09.095 * BGSAVE done, 25 keys saved, 0 keys skipped, 884229 bytes written.
+145946:C 08 May 2026 20:29:09.109 * DB saved on disk
+145946:C 08 May 2026 20:29:09.110 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+145467:M 08 May 2026 20:29:09.182 * Background saving terminated with success
+145467:signal-handler (1778303054) Received SIGTERM scheduling shutdown...

@@ -24,14 +24,18 @@ import threading
 import time
 
 import redis
+import shlex
+import subprocess
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from common.cluster_runner import (
     ClusterConfig, MigrationMetricsWriter,
     apptainer_instance_name,
+    install_signal_handlers, register_tracked_process, terminate_all_tracked,
+    is_local_node,
     launch_robot, kill_robot,
     live_status_loop, post_migration_success_rate,
-    rsync_dir, ssh_run,
+    rsync_dir, ssh_run, _SSH_OPTS,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -224,6 +228,10 @@ def wait_for_completion(cfg: ClusterConfig, r: redis.Redis) -> None:
 
 
 def main() -> int:
+    # Install signal handlers BEFORE launching anything, so a SIGTERM from
+    # MOAB (walltime / canceljob) cleans up tracked SSH+apptainer Popens.
+    install_signal_handlers()
+
     cfg = ClusterConfig()
     LOG.info("=" * 78)
     LOG.info("Condition A (DHT+FRL) — server=%s clients=%s",
@@ -261,16 +269,38 @@ def main() -> int:
         f"SINGULARITYENV_PYTHONUNBUFFERED=1 "
         f"SINGULARITYENV_PYTHONPATH=/pylibs:/app "
     )
-    flower_cmd = (
-        f"cd {cfg.swiftbot_root}/dht_frl && "
-        f"nohup env {flower_env} apptainer exec --nv "
-        f"  --bind {cfg.swiftbot_root}:/app "
-        f"  --bind {pylibs_host}:/pylibs "
-        f"  {cfg.img_dir}/{IMAGE} "
-        f"  python3 /app/dht_frl/flower_server.py "
-        f"  > {cfg.run_log_dir}/flower_server.log 2>&1 &"
+    # Tracked SSH+apptainer-exec Popen (NOT nohup+&). Apptainer is in the
+    # foreground of the SSH session, so when this runner exits, sshd HUPs
+    # apptainer and Flower dies cleanly — no orphans for the cluster admin
+    # to chase down.
+    # Non-interactive SSH does not source ~/.bashrc, so apptainer (in the
+    # conda env) is not on PATH on remote nodes. Source conda first.
+    conda_base = os.environ.get("CONDA_BASE", "/home/029822154/miniconda3")
+    conda_env = os.environ.get("CONDA_ENV", "swiftbot")
+    flower_remote = (
+        f"cd {shlex.quote(cfg.swiftbot_root + '/dht_frl')}; "
+        f"source {shlex.quote(conda_base)}/bin/activate {shlex.quote(conda_env)} && "
+        f"exec env {flower_env} apptainer exec "
+        f"--bind {shlex.quote(cfg.swiftbot_root)}:/app "
+        f"--bind {shlex.quote(pylibs_host)}:/pylibs "
+        f"{shlex.quote(cfg.img_dir + '/' + IMAGE)} "
+        f"python3 /app/dht_frl/flower_server.py"
     )
-    ssh_run(cfg.server_node, flower_cmd, timeout=30, check=False)
+    flower_log = open(f"{cfg.run_log_dir}/flower_server.log", "ab", buffering=0)
+    if is_local_node(cfg.server_node):
+        # Flower server runs on the server node, which is the same node this
+        # runner is on — bypass SSH (cluster refuses self-SSH).
+        flower_cmd = ["bash", "-c", flower_remote]
+    else:
+        flower_cmd = ["ssh", *_SSH_OPTS,
+                      "-o", "ServerAliveInterval=30",
+                      "-o", "ServerAliveCountMax=3",
+                      "-n", cfg.server_node, flower_remote]
+    flower_proc = subprocess.Popen(
+        flower_cmd, stdin=subprocess.DEVNULL,
+        stdout=flower_log, stderr=flower_log,
+    )
+    register_tracked_process(flower_proc, "flower_server")
     time.sleep(15)  # let Flower bind its port
 
     # Launch robot apptainer instances on the two client nodes.
@@ -292,6 +322,8 @@ def main() -> int:
         wait_for_completion(cfg, r)
     except KeyboardInterrupt:
         LOG.info("Interrupted")
+    finally:
+        terminate_all_tracked(hard_after=5.0)
     LOG.info("Migration events written: %d → %s",
              writer.event_count, writer.path)
     return 0

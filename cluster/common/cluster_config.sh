@@ -21,7 +21,7 @@ export RESULTS_ROOT="${CLUSTER_ROOT}/results"
 
 # --- conda env (carries python+redis CLI for the host-side runner) ---
 export CONDA_BASE="/home/${BEACH_ID}/miniconda3"
-export CONDA_ENV="swiftbot"
+export CONDA_ENV="base"
 
 # --- experiment knobs (cluster-only — workstation values live in the workers) ---
 export NUM_CLIENTS=20             # 10 robots × 2 client nodes

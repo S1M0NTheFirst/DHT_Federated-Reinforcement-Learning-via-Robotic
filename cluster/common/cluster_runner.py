@@ -22,12 +22,14 @@ Environment variables (set by run_X.sh before invoking the runner):
 """
 from __future__ import annotations
 
+import atexit
 import csv
 import json
 import logging
 import os
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -88,9 +90,37 @@ _SSH_OPTS = [
     "-o", "ConnectTimeout=10",
 ]
 
+
+# Cache the local hostname at import time. Some clusters (CSULB HPC2 included)
+# refuse SSH from a node to itself, so any "remote" command targeting the
+# local node must be run as a plain bash subprocess instead of through SSH.
+_LOCAL_FQDN = socket.getfqdn()
+try:
+    _LOCAL_SHORT = socket.gethostname().split(".")[0]
+except Exception:
+    _LOCAL_SHORT = _LOCAL_FQDN.split(".")[0]
+
+
+def is_local_node(node: str) -> bool:
+    """Return True if `node` refers to the host this Python process runs on."""
+    if not node:
+        return False
+    if node == _LOCAL_FQDN or node == _LOCAL_SHORT:
+        return True
+    # Match short-name + any domain suffix ("n034" vs "n034.cluster.pssclabs.com")
+    n_short = node.split(".")[0]
+    return n_short == _LOCAL_SHORT
+
 def ssh_run(node: str, command: str, *, timeout: int = 60,
             check: bool = False) -> subprocess.CompletedProcess:
-    """Run a remote shell command and capture output."""
+    """Run a remote shell command and capture output. If `node` is the local
+    host, runs the command via a local bash subprocess (this cluster refuses
+    SSH from a node to itself).
+    """
+    if is_local_node(node):
+        return subprocess.run(["bash", "-c", command],
+                              capture_output=True, text=True,
+                              timeout=timeout, check=check)
     cmd = ["ssh", *_SSH_OPTS, "-n", node, command]
     return subprocess.run(cmd, capture_output=True, text=True,
                           timeout=timeout, check=check)
@@ -98,18 +128,96 @@ def ssh_run(node: str, command: str, *, timeout: int = 60,
 
 def ssh_run_async(node: str, command: str, log_path: str) -> subprocess.Popen:
     """Run a remote command, streaming stdout/stderr to log_path on the runner host.
-    Returns a Popen handle that the caller can wait on or terminate.
+    Falls back to local bash for self-targeted commands.
     """
     fh = open(log_path, "ab", buffering=0)
+    if is_local_node(node):
+        return subprocess.Popen(["bash", "-c", command],
+                                stdout=fh, stderr=fh, stdin=subprocess.DEVNULL)
     cmd = ["ssh", *_SSH_OPTS, "-n", node, command]
     return subprocess.Popen(cmd, stdout=fh, stderr=fh, stdin=subprocess.DEVNULL)
 
 
-def ssh_detached(node: str, command: str) -> None:
-    """Fire-and-forget: launch a remote command via nohup and return immediately."""
-    wrapped = f"nohup bash -lc {shlex.quote(command)} >/dev/null 2>&1 &"
-    subprocess.run(["ssh", *_SSH_OPTS, "-n", "-f", node, wrapped],
-                   timeout=15, check=False)
+# NOTE: ssh_detached() removed deliberately. The previous implementation
+# used `ssh -f` + `nohup ... &` which double-detached the remote process —
+# exactly the orphan pattern the cluster admin asked us to stop using
+# (caused stuck containers requiring node reboot). Every remote process
+# must now be launched as a tracked Popen child of the runner. Use
+# ssh_run_async() and register_tracked_process() instead.
+
+
+# --------------------------------------------------------------------------- #
+# Tracked-process registry — every long-lived SSH/apptainer Popen we spawn    #
+# is recorded here so we can terminate it cleanly on signal/exit. This is    #
+# the cluster admin's requirement: "Ensure all processes stay tied to the   #
+# job ... ensure Apptainer is run in the foreground within the job script". #
+# --------------------------------------------------------------------------- #
+
+_tracked_lock = threading.Lock()
+_tracked_processes: list[tuple[subprocess.Popen, str]] = []
+_robot_procs: dict[int, tuple[subprocess.Popen, str]] = {}
+_signal_handlers_installed = False
+
+
+def register_tracked_process(p: subprocess.Popen, desc: str = "") -> None:
+    with _tracked_lock:
+        _tracked_processes.append((p, desc))
+
+
+def _terminate_one(p: subprocess.Popen, desc: str, *, hard_after: float) -> None:
+    if p.poll() is not None:
+        return
+    try:
+        p.terminate()
+    except Exception:
+        pass
+    try:
+        p.wait(timeout=hard_after)
+    except subprocess.TimeoutExpired:
+        try:
+            p.kill()
+        except Exception:
+            pass
+        try:
+            p.wait(timeout=2)
+        except Exception:
+            pass
+
+
+def terminate_all_tracked(*, hard_after: float = 5.0) -> None:
+    with _tracked_lock:
+        snap = list(_tracked_processes)
+    LOG.info("[Cleanup] terminating %d tracked SSH/apptainer processes", len(snap))
+    threads = []
+    for p, desc in snap:
+        t = threading.Thread(target=_terminate_one,
+                             args=(p, desc),
+                             kwargs={"hard_after": hard_after},
+                             daemon=True)
+        t.start(); threads.append(t)
+    for t in threads:
+        t.join(timeout=hard_after + 2)
+
+
+def install_signal_handlers() -> None:
+    """Install SIGTERM/SIGINT handlers and an atexit hook that terminate
+    every tracked SSH/apptainer Popen. Idempotent.
+    """
+    global _signal_handlers_installed
+    if _signal_handlers_installed:
+        return
+
+    def _handler(signum, _frame):
+        LOG.warning("[Signal] received signal %d — terminating all tracked workers",
+                    signum)
+        terminate_all_tracked(hard_after=5.0)
+        # Re-raise default behavior so the parent shell sees the exit code.
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT,  _handler)
+    atexit.register(lambda: terminate_all_tracked(hard_after=2.0))
+    _signal_handlers_installed = True
 
 
 def rsync_dir(src_node: str, src_path: str, dst_node: str, dst_path: str,
@@ -148,24 +256,28 @@ def apptainer_instance_name(cid: int) -> str:
 def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
                  worker_script: str, *, extra_env: Optional[dict] = None,
                  container_type: str = "gpu_specialist") -> None:
-    """SSH into `node` and launch one apptainer instance running the worker
-    script. The instance is named swiftbot_robot_{cid:03d} so we can find it
-    later for migration / kill. Logs are tee'd into RUN_LOG_DIR/robot_{cid}.log
-    on this (server) node by piping through ssh.
-    """
-    inst   = apptainer_instance_name(cid)
-    chk    = f"{cfg.checkpoint_base}/{inst}"
-    log    = f"{cfg.run_log_dir}/robot_{cid:03d}.log"
+    """Launch one robot worker on `node` as a tracked SSH+apptainer-exec child.
 
-    # Apptainer does NOT inherit host env vars into the container. The most
-    # portable way to pass them (works on every apptainer & singularity
-    # version) is the APPTAINERENV_FOO=bar / SINGULARITYENV_FOO=bar prefix
-    # mechanism: set them in the host env via `env`, apptainer strips the
-    # prefix and exports the rest inside the container.
-    # pylibs/ is the host dir build_images.sh populated via `pip --target`.
-    # We bind it at /pylibs and prepend to PYTHONPATH so `import flwr` etc.
-    # resolve to those packages (the .sif itself only has torch+cuda).
+    Important behavior changes vs the previous version (do NOT revert):
+      - Uses `apptainer exec` in the FOREGROUND of the SSH session. We do
+        NOT call `apptainer instance start` anymore — that creates a
+        persistent "Apptainer runtime parent" that survives the job.
+      - The SSH process is a tracked Popen child of THIS runner. When the
+        runner dies (clean exit, signal, or job termination) the SSH
+        client dies, the remote sshd HUPs apptainer-exec, which kills the
+        worker. No orphans.
+      - The remote command uses `exec env ...` so apptainer-exec REPLACES
+        the bash that sshd spawned, ensuring SIGHUP propagates straight to
+        apptainer (bash by default doesn't forward HUP to children).
+    """
+    chk = f"{cfg.checkpoint_base}/{apptainer_instance_name(cid)}"
+    log = f"{cfg.run_log_dir}/robot_{cid:03d}.log"
+
     pylibs_host = os.path.join(cfg.img_dir, "pylibs")
+    cluster_root = os.environ.get("CLUSTER_ROOT") or \
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    worker_path = worker_script if worker_script.startswith("/") else f"/app/{worker_script}"
+
     env_pairs = {
         "REDIS_HOST":       cfg.redis_host,
         "REDIS_PORT":       cfg.redis_port,
@@ -175,7 +287,7 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
         "TOTAL_TASKS":      cfg.total_tasks,
         "TOTAL_FL_ROUNDS":  cfg.total_fl_rounds,
         "PYTHONUNBUFFERED": 1,
-        "PYTHONPATH":       "/pylibs:/app",
+        "PYTHONPATH":       "/pylibs:/app:/robot_lib",
     }
     if extra_env:
         env_pairs.update(extra_env)
@@ -185,58 +297,69 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
         for k, v in env_pairs.items()
     )
 
-    # bind-mount swiftbot_rl/ at /app so the existing worker scripts run
-    # without any image rebuild. Each robot gets its own /checkpoints dir.
-    # Apptainer instance start is daemonized; the second exec actually runs
-    # the worker (kept separate from the instance startscript so we can
-    # cleanly tee stdout/stderr to a per-robot log on the run-log share).
+    # Foreground apptainer exec. `exec` makes apptainer the immediate child
+    # of sshd so SIGHUP on connection close propagates without bash in the way.
+    # Non-interactive SSH does not source ~/.bashrc, so apptainer (in the
+    # conda env) is not on PATH on remote nodes. Source conda first.
+    conda_base = os.environ.get("CONDA_BASE", "/home/029822154/miniconda3")
+    conda_env = os.environ.get("CONDA_ENV", "swiftbot")
+    # Workers do `sys.path.insert(0, "/app/robot")` then `import task_generator`
+    # but the actual file lives at swiftbot_rl/dht_frl/robot/task_generator.py.
+    # Binding to /app/robot fails ("file exists" inside the /app bind layer),
+    # so bind it elsewhere and add to PYTHONPATH — Python finds it before the
+    # broken sys.path.insert kicks in.
+    robot_dir_host = os.path.join(cfg.swiftbot_root, "dht_frl", "robot")
     remote_cmd = (
-        f"mkdir -p {chk} && "
-        f"apptainer instance stop -s KILL {inst} 2>/dev/null || true; "
-        f"apptainer instance start --nv "
-        f"  --bind {cfg.swiftbot_root}:/app "
-        f"  --bind {chk}:/checkpoints "
-        f"  --bind {pylibs_host}:/pylibs "
-        f"  {cfg.img_dir}/{image} {inst} && "
-        f"sleep 3 && "
-        f"nohup env {env_prefix} apptainer exec instance://{inst} "
-        f"  python3 /app/{worker_script} "
-        f"    --client-id {cid} --num-clients {cfg.num_clients} "
-        f"    --container-type {container_type} "
-        f"    > {log} 2>&1 &"
+        f"mkdir -p {shlex.quote(chk)}; "
+        f"source {shlex.quote(conda_base)}/bin/activate {shlex.quote(conda_env)} && "
+        f"exec env {env_prefix} apptainer exec "
+        f"--bind {shlex.quote(cfg.swiftbot_root)}:/app "
+        f"--bind {shlex.quote(robot_dir_host)}:/robot_lib "
+        f"--bind {shlex.quote(cluster_root)}:/cluster_app "
+        f"--bind {shlex.quote(chk)}:/checkpoints "
+        f"--bind {shlex.quote(pylibs_host)}:/pylibs "
+        f"{shlex.quote(cfg.img_dir + '/' + image)} "
+        # NUM_CLIENTS passed via APPTAINERENV_NUM_CLIENTS, not CLI — the
+        # frozen swiftbot_rl/cold_restart/worker_random_client.py doesn't
+        # accept --num-clients, and our cluster worker has a default+env.
+        f"python3 {shlex.quote(worker_path)} "
+        f"--client-id {cid} "
+        f"--container-type {shlex.quote(container_type)}"
     )
-    ssh_run(node, remote_cmd, timeout=120, check=False)
+
+    log_fh = open(log, "ab", buffering=0)
+    if is_local_node(node):
+        # Local launch — apptainer exec runs as a direct child of this Python
+        # process. No SSH needed (and on this cluster impossible). The Popen
+        # is still tracked so cleanup terminates it.
+        cmd = ["bash", "-c", remote_cmd]
+    else:
+        cmd = ["ssh", *_SSH_OPTS,
+               "-o", "ServerAliveInterval=30",
+               "-o", "ServerAliveCountMax=3",
+               "-n", node, remote_cmd]
+    p = subprocess.Popen(cmd,
+                         stdin=subprocess.DEVNULL,
+                         stdout=log_fh, stderr=log_fh)
+    register_tracked_process(p, f"robot_{cid:03d}@{node}")
+    with _tracked_lock:
+        _robot_procs[cid] = (p, node)
 
 
 def kill_robot(cfg: ClusterConfig, node: str, cid: int) -> None:
-    """Forcefully stop a robot. The cold_restart-style worker sits in a
-    `while True: time.sleep(5)` loop after requesting migration with no
-    shutdown check inside the loop, so SIGTERM (apptainer's default) just
-    interrupts one sleep iteration. We send SIGKILL to the apptainer
-    instance AND pkill -9 the python worker as a belt-and-suspenders kill.
+    """Stop a robot by terminating its tracked SSH Popen, then belt-and-suspenders
+    pkill on the remote node to catch anything that didn't die from SIGHUP.
     """
-    inst = apptainer_instance_name(cid)
+    with _tracked_lock:
+        pair = _robot_procs.pop(cid, None)
+    if pair is not None:
+        p, _node = pair
+        _terminate_one(p, f"robot_{cid:03d}", hard_after=5.0)
+    # Remote pkill — catches any worker whose parent SSH was already gone
+    # (e.g. retry case) or that ignored SIGHUP for some reason.
     ssh_run(node,
-            f"apptainer instance stop -s KILL {inst} 2>/dev/null; "
-            f"pkill -9 -u $USER -f 'client-id {cid} --num-clients' || true",
-            timeout=30, check=False)
-
-
-def get_robot_pid(node: str, cid: int) -> int:
-    """Host PID of the python worker inside apptainer instance for cid.
-    Returns 0 if not found (instance not running).
-    """
-    inst = apptainer_instance_name(cid)
-    rr = ssh_run(
-        node,
-        f"pgrep -u $USER -f 'apptainer.*{inst}.*client-id {cid}' "
-        f"| head -1",
-        timeout=10,
-    )
-    try:
-        return int((rr.stdout or "").strip().splitlines()[0])
-    except (ValueError, IndexError):
-        return 0
+            f"pkill -9 -u $USER -f 'client-id {cid} --num-clients' 2>/dev/null || true",
+            timeout=15, check=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -359,90 +482,7 @@ def live_status_loop(cfg: ClusterConfig, r, writer: MigrationMetricsWriter,
         time.sleep(interval)
 
 
-# --------------------------------------------------------------------------- #
-# CRIU helpers — these run via SSH on the source/destination node.            #
-# --------------------------------------------------------------------------- #
-
-def remote_criu_dump(node: str, pid: int, images_dir: str,
-                     parent_dir: str = "", *, pre_dump: bool = False,
-                     leave_running: bool = True, timeout: int = 120) -> dict:
-    """Run `criu dump` on a remote node. Returns dict with returncode,
-    size_mb, stderr (tail). Falls back to a SIMULATE marker if criu is missing
-    or the dump fails — caller should check returncode.
-    """
-    if pid <= 0:
-        return {"returncode": -1, "size_mb": 0.0,
-                "stderr": "pid<=0 (instance not found)"}
-    subcmd = "pre-dump" if pre_dump else "dump"
-    parent_flag = ""
-    if parent_dir:
-        # CRIU expects a `parent` symlink in images_dir → ../parent_basename
-        parent_flag = (
-            f"if [ -d {shlex.quote(parent_dir)} ]; then "
-            f"  ln -sfn $(realpath --relative-to={shlex.quote(images_dir)} "
-            f"{shlex.quote(parent_dir)}) {shlex.quote(images_dir)}/parent; "
-            f"fi && "
-        )
-    leave_flag = "--leave-running" if (leave_running and not pre_dump) else ""
-    track_flag = "--track-mem" if (parent_dir or pre_dump) else ""
-    cmd = (
-        f"mkdir -p {shlex.quote(images_dir)} && {parent_flag} "
-        f"criu {subcmd} --tree {pid} --images-dir {shlex.quote(images_dir)} "
-        f"--tcp-established --shell-job --ext-unix-sk --manage-cgroups=soft "
-        f"{leave_flag} {track_flag} 2>&1 | tee {shlex.quote(images_dir)}/criu.log; "
-        f"echo __CRIU_RC__$?"
-    )
-    t0 = time.perf_counter()
-    rr = ssh_run(node, cmd, timeout=timeout)
-    elapsed_ms = (time.perf_counter() - t0) * 1000
-    rc = -1
-    out = rr.stdout or ""
-    for line in out.splitlines():
-        if line.startswith("__CRIU_RC__"):
-            try:
-                rc = int(line[len("__CRIU_RC__"):])
-            except ValueError:
-                pass
-    # Get image-dir size.
-    sz = ssh_run(node, f"du -sb {shlex.quote(images_dir)} 2>/dev/null | cut -f1",
-                 timeout=10)
-    size_mb = 0.0
-    try:
-        size_mb = int((sz.stdout or "0").strip()) / (1024 * 1024)
-    except ValueError:
-        pass
-    return {"returncode": rc, "size_mb": round(size_mb, 2),
-            "stderr": out[-1500:], "elapsed_ms": elapsed_ms}
-
-
-def remote_criu_restore(node: str, images_dir: str, log_path: str,
-                        timeout: int = 120) -> dict:
-    """Run `criu restore --restore-detached` on a remote node. The restored
-    process becomes a child of init on that node.
-    """
-    cmd = (
-        f"criu restore --images-dir {shlex.quote(images_dir)} "
-        f"--tcp-established --shell-job --ext-unix-sk --manage-cgroups=soft "
-        f"--restore-detached --restore-sibling 2>&1 | tee {shlex.quote(log_path)}; "
-        f"echo __CRIU_RC__$?"
-    )
-    t0 = time.perf_counter()
-    rr = ssh_run(node, cmd, timeout=timeout)
-    elapsed_ms = (time.perf_counter() - t0) * 1000
-    rc = -1
-    for line in (rr.stdout or "").splitlines():
-        if line.startswith("__CRIU_RC__"):
-            try:
-                rc = int(line[len("__CRIU_RC__"):])
-            except ValueError:
-                pass
-    return {"returncode": rc, "elapsed_ms": elapsed_ms,
-            "stderr": (rr.stdout or "")[-1500:]}
-
-
-def simulate_dump_seconds() -> float:
-    """Synthetic dump time matching observed full-process CRIU on consumer
-    GPUs (~5–9s). Used when real CRIU isn't available — keeps the comparison
-    against Condition A meaningful even on this cluster."""
-    import random
-    return random.triangular(5.0, 9.0, 7.0)
+# NOTE: CRIU helpers (remote_criu_dump, remote_criu_restore,
+# simulate_dump_seconds) and get_robot_pid were removed. CRIU is unavailable
+# on this cluster; Conditions C/D now use application-level torch.save/load
+# (see cluster/workers/worker_app_checkpoint.py) and don't need the host PID.
