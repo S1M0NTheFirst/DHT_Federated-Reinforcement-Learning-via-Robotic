@@ -6,7 +6,7 @@
 # "nodes=3:ppn=8" consolidates onto one host. n034 currently rejects SSH
 # from outside an active job (head→n034 fails), so we use n035 + n036
 # (RTX 3090) + n021 (Tesla P100) instead. Swap n021 for n022 if it queues.
-#MSUB -l nodes=n005.cluster.pssclabs.com:ppn=8+n006.cluster.pssclabs.com:ppn=8+n016.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n016.cluster.pssclabs.com:ppn=8+n017.cluster.pssclabs.com:ppn=8+n018.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 set -uo pipefail
