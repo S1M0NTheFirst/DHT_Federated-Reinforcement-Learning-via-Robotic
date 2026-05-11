@@ -84,10 +84,23 @@ class ClusterConfig:
 # SSH helpers — every cross-node action goes through these.                   #
 # --------------------------------------------------------------------------- #
 
+# SSH connection multiplexing: launching 10 robots/node back-to-back hit
+# sshd's MaxStartups rate limiter (saw 6/10 "Connection closed by … port 22"
+# even with a 3s gap between launches). ControlMaster reuses ONE TCP
+# connection per (user,host,port) for all subsequent ssh calls, so we open
+# one transport per node and stream all robot launches through it.
+#
+# ControlPath includes %h (host), %r (user), %p (port) AND PBS_JOBID so
+# concurrent jobs don't fight over the same socket.
+_SSH_CTRL_DIR = "/tmp/ssh-mux-%s" % os.environ.get("PBS_JOBID", str(os.getpid()))
+os.makedirs(_SSH_CTRL_DIR, exist_ok=True)
 _SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
+    "-o", "ControlMaster=auto",
+    "-o", f"ControlPath={_SSH_CTRL_DIR}/%r@%h:%p",
+    "-o", "ControlPersist=10m",
 ]
 
 

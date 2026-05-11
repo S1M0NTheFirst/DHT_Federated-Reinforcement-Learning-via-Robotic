@@ -1,7 +1,7 @@
 #!/bin/bash
 #MSUB -N SwiftBot_E_ColdRestart
 #MSUB -W group_list=hpc2-coe-users
-#MSUB -l walltime=02:00:00
+#MSUB -l walltime=05:00:00
 # Pinned nodes. SINGLETASK is not honored on this MOAB install, so generic
 # "nodes=3:ppn=8" consolidates onto one host. n034 currently rejects SSH
 # from outside an active job (head→n034 fails), so we use n035 + n036
