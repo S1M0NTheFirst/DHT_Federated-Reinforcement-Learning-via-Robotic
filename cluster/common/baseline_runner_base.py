@@ -25,6 +25,7 @@ from .cluster_runner import (
     install_signal_handlers, terminate_all_tracked,
     launch_robot, kill_robot,
     live_status_loop, ssh_run,
+    establish_ssh_master, close_ssh_master,
 )
 
 LOG = logging.getLogger("baseline")
@@ -73,15 +74,29 @@ def run_baseline(
 
     writer = MigrationMetricsWriter(condition, cfg.results_dir)
 
+    # Pre-establish a per-cid SSH master on EACH client node for EVERY robot.
+    # Each cid gets one master per client node (so 2 masters per cid, total
+    # 2 * NUM_CLIENTS masters). Migration relaunches then reuse the existing
+    # master on the destination — they NEVER open a new TCP, which keeps us
+    # immune to sshd MaxStartups bursts during clustered migration waves.
+    # Pre-establishing serially with 1s gap stays well under MaxStartups.
+    total_masters = cfg.num_clients * len(cfg.client_nodes)
+    LOG.info("Pre-establishing %d SSH masters (%d cids × %d nodes)",
+             total_masters, cfg.num_clients, len(cfg.client_nodes))
+    for cid in range(cfg.num_clients):
+        for client_node in cfg.client_nodes:
+            establish_ssh_master(client_node, cid)
+            time.sleep(1)
+
     LOG.info("Launching %d robot instances", cfg.num_clients)
     for cid in range(cfg.num_clients):
         node = cfg.home_node_for_client(cid)
         update_node(f"robot_{cid:03d}", node)
         launch_robot(cfg, node, cid, image, worker_script,
                      extra_env=initial_extra_env)
-        # 3s spacing reduces SSH MaxStartups pressure when launching ~10
-        # workers per node; saw "Connection closed/timeout" without it.
-        time.sleep(3)
+        # 0.5s spacing — robot launches are slaves on pre-established
+        # per-cid masters, so this is a near-instant socket handshake.
+        time.sleep(0.5)
     LOG.info("All robots launched.")
 
     if pre_loop is not None:
@@ -108,6 +123,12 @@ def run_baseline(
         # gives us a clear log line and guarantees cleanup even if the
         # interpreter is shut down abnormally.
         terminate_all_tracked(hard_after=5.0)
+        # Close every per-cid SSH master so ControlPersist=10m doesn't leave
+        # daemonised ssh processes lingering. Close on BOTH client nodes
+        # because the robot may have migrated and have masters on either.
+        for cid in range(cfg.num_clients):
+            for client_node in cfg.client_nodes:
+                close_ssh_master(client_node, cid)
     LOG.info("Migration events written: %d → %s", writer.event_count, writer.path)
     return 0
 
@@ -131,6 +152,12 @@ def _migration_loop(cfg: ClusterConfig, r: redis.Redis,
                     int(info.get("task_counter", 0)),
                 )
                 writer.write_event(metrics)
+                # Throttle: spread out migration relaunches so multiple fresh
+                # TCPs to the same dst node don't pile up and trip sshd's
+                # MaxStartups rate limit. Saw 5-6 robots/run die during the
+                # task-200 / task-260 / task-400 migration waves without this.
+                # 6s leaves ~10 migrations/minute peak which is comfortable.
+                time.sleep(6)
         except Exception as e:
             LOG.error("[Monitor] %r", e)
         time.sleep(1)

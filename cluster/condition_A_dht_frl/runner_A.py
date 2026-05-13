@@ -34,6 +34,7 @@ from common.cluster_runner import (
     install_signal_handlers, register_tracked_process, terminate_all_tracked,
     is_local_node,
     launch_robot, kill_robot,
+    establish_ssh_master, close_ssh_master,
     live_status_loop, post_migration_success_rate,
     rsync_dir, ssh_run, _SSH_OPTS,
 )
@@ -209,6 +210,9 @@ def migration_monitor(cfg: ClusterConfig, r: redis.Redis,
                     task_counter_pre=int(info.get("task_counter", 0)),
                 )
                 writer.write_event(metrics)
+                # Throttle to avoid MaxStartups bursts (see baseline_runner_base
+                # for the long story).
+                time.sleep(6)
         except Exception as e:
             LOG.error("[Monitor] %r", e)
         time.sleep(1)
@@ -303,6 +307,17 @@ def main() -> int:
     register_tracked_process(flower_proc, "flower_server")
     time.sleep(15)  # let Flower bind its port
 
+    # Pre-establish per-cid SSH masters on BOTH client nodes for every cid.
+    # Migration relaunches then reuse an existing master and never open a
+    # fresh TCP (avoids MaxStartups burst rejections). See
+    # baseline_runner_base.py for the full story.
+    total_masters = cfg.num_clients * len(cfg.client_nodes)
+    LOG.info("Pre-establishing %d SSH masters", total_masters)
+    for cid in range(cfg.num_clients):
+        for client_node in cfg.client_nodes:
+            establish_ssh_master(client_node, cid)
+            time.sleep(1)
+
     # Launch robot apptainer instances on the two client nodes.
     LOG.info("Launching %d robot instances", cfg.num_clients)
     for cid in range(cfg.num_clients):
@@ -310,7 +325,7 @@ def main() -> int:
         with _robot_lock:
             _robot_node[f"robot_{cid:03d}"] = node
         launch_robot(cfg, node, cid, IMAGE, WORKER)
-        time.sleep(2)  # stagger GPU claims
+        time.sleep(0.5)  # masters pre-established → fast slave handshakes
     LOG.info("All robots launched. Waiting for FL to converge.")
 
     threading.Thread(target=migration_monitor, args=(cfg, r, writer),
@@ -324,6 +339,9 @@ def main() -> int:
         LOG.info("Interrupted")
     finally:
         terminate_all_tracked(hard_after=5.0)
+        for cid in range(cfg.num_clients):
+            for client_node in cfg.client_nodes:
+                close_ssh_master(client_node, cid)
     LOG.info("Migration events written: %d → %s",
              writer.event_count, writer.path)
     return 0

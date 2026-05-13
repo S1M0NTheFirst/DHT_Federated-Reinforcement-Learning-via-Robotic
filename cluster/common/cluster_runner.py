@@ -84,24 +84,68 @@ class ClusterConfig:
 # SSH helpers — every cross-node action goes through these.                   #
 # --------------------------------------------------------------------------- #
 
-# SSH connection multiplexing: launching 10 robots/node back-to-back hit
-# sshd's MaxStartups rate limiter (saw 6/10 "Connection closed by … port 22"
-# even with a 3s gap between launches). ControlMaster reuses ONE TCP
-# connection per (user,host,port) for all subsequent ssh calls, so we open
-# one transport per node and stream all robot launches through it.
+# SSH connection strategy (V3 — per-robot mux):
 #
-# ControlPath includes %h (host), %r (user), %p (port) AND PBS_JOBID so
-# concurrent jobs don't fight over the same socket.
+# This cluster's sshd appears to enforce a tight MaxSessions limit on each
+# multiplexed master: when 10 worker SSHs share one master TCP, attempts to
+# open an 11th session (the migration relaunch) get "Session open refused
+# by peer". And without multiplexing entirely, 10+ simultaneous fresh TCPs
+# trip MaxStartups → "Connection closed by … port 22".
+#
+# Solution: give EACH robot its own dedicated ControlPath socket keyed by
+# (cid, host). Effects:
+#   - Each ssh has its own master TCP with only 1-2 sessions on it (the
+#     worker + occasional pkill) → never near MaxSessions.
+#   - The pre-master phase establishes 10 connections per node spaced 1s
+#     apart → well under MaxStartups.
+#   - Migration relaunches go through a FRESH master (different host) →
+#     no contention with existing sessions on either node.
+#
+# ControlPath includes PBS_JOBID so concurrent jobs don't collide.
 _SSH_CTRL_DIR = "/tmp/ssh-mux-%s" % os.environ.get("PBS_JOBID", str(os.getpid()))
 os.makedirs(_SSH_CTRL_DIR, exist_ok=True)
+
+# Base options used for non-robot SSH calls (Redis startup, generic ssh_run).
+# These do NOT include multiplexing — non-robot calls are rare so a fresh
+# TCP each time is fine and avoids master-process bookkeeping.
 _SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
-    "-o", "ControlMaster=auto",
-    "-o", f"ControlPath={_SSH_CTRL_DIR}/%r@%h:%p",
-    "-o", "ControlPersist=10m",
 ]
+
+
+def _cid_ctrl_path(cid: int) -> str:
+    """ControlPath for robot `cid`. Per-cid sockets isolate each worker's
+    SSH on its own TCP — no shared MaxSessions pressure."""
+    return f"{_SSH_CTRL_DIR}/cid{cid}-%r@%h:%p"
+
+
+def _ssh_opts_for_cid(cid: int) -> list[str]:
+    """Build SSH options that route robot `cid` through its own master."""
+    return _SSH_OPTS + [
+        "-o", "ControlMaster=auto",
+        "-o", f"ControlPath={_cid_ctrl_path(cid)}",
+        "-o", "ControlPersist=10m",
+    ]
+
+
+def establish_ssh_master(node: str, cid: int) -> None:
+    """Open a persistent SSH master for `cid` on `node` before launching its
+    worker. Each robot gets its own master TCP so MaxSessions can't be hit."""
+    if is_local_node(node):
+        return
+    cmd = ["ssh", *_ssh_opts_for_cid(cid), "-M", "-f", "-N", node]
+    subprocess.run(cmd, check=False, timeout=30)
+
+
+def close_ssh_master(node: str, cid: int) -> None:
+    """Tear down the persistent master for `cid` on `node`."""
+    if is_local_node(node):
+        return
+    cmd = ["ssh", *_ssh_opts_for_cid(cid), "-O", "exit", node]
+    subprocess.run(cmd, check=False, timeout=10,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # Cache the local hostname at import time. Some clusters (CSULB HPC2 included)
@@ -170,6 +214,13 @@ _tracked_lock = threading.Lock()
 _tracked_processes: list[tuple[subprocess.Popen, str]] = []
 _robot_procs: dict[int, tuple[subprocess.Popen, str]] = {}
 _signal_handlers_installed = False
+
+# CIDs that were just killed and are about to be relaunched as part of a
+# migration. launch_robot consults this to decide whether to use the SSH
+# multiplex (initial bulk launch) or bypass it (migration relaunch — the
+# old session may still be occupying a mux slot, causing "Session open
+# refused by peer"). Cleared by launch_robot after a successful Popen.
+_recently_killed_cids: set[int] = set()
 
 
 def register_tracked_process(p: subprocess.Popen, desc: str = "") -> None:
@@ -347,7 +398,10 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
         # is still tracked so cleanup terminates it.
         cmd = ["bash", "-c", remote_cmd]
     else:
-        cmd = ["ssh", *_SSH_OPTS,
+        # Per-cid mux: each robot gets its own master TCP. On a migration
+        # relaunch the (cid, dst_node) pair is fresh, so a new master is
+        # established automatically by ControlMaster=auto — no contention.
+        cmd = ["ssh", *_ssh_opts_for_cid(cid),
                "-o", "ServerAliveInterval=30",
                "-o", "ServerAliveCountMax=3",
                "-n", node, remote_cmd]
@@ -357,22 +411,51 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
     register_tracked_process(p, f"robot_{cid:03d}@{node}")
     with _tracked_lock:
         _robot_procs[cid] = (p, node)
+    _recently_killed_cids.discard(cid)
 
 
 def kill_robot(cfg: ClusterConfig, node: str, cid: int) -> None:
     """Stop a robot by terminating its tracked SSH Popen, then belt-and-suspenders
     pkill on the remote node to catch anything that didn't die from SIGHUP.
     """
+    _recently_killed_cids.add(cid)
     with _tracked_lock:
         pair = _robot_procs.pop(cid, None)
     if pair is not None:
         p, _node = pair
         _terminate_one(p, f"robot_{cid:03d}", hard_after=5.0)
     # Remote pkill — catches any worker whose parent SSH was already gone
-    # (e.g. retry case) or that ignored SIGHUP for some reason.
-    ssh_run(node,
-            f"pkill -9 -u $USER -f 'client-id {cid} --num-clients' 2>/dev/null || true",
-            timeout=15, check=False)
+    # (e.g. retry case) or that ignored SIGHUP for some reason. Route through
+    # the per-cid SSH master (already established for this worker) instead of
+    # opening a fresh TCP via ssh_run — under load, fresh TCPs were timing
+    # out at 15s, raising TimeoutExpired in the migration loop and leaving
+    # the robot in a zombie state (killed but never relaunched).
+    if not is_local_node(node):
+        try:
+            subprocess.run(
+                ["ssh", *_ssh_opts_for_cid(cid), "-n", node,
+                 f"pkill -9 -u $USER -f '\\-\\-client-id {cid} --container-type' "
+                 f"2>/dev/null || true"],
+                timeout=15, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            # Best-effort — the Popen kill above already sent SIGHUP via sshd,
+            # so the worker should be dead. Don't propagate so the relaunch
+            # can proceed.
+            pass
+    else:
+        subprocess.run(
+            ["bash", "-c",
+             f"pkill -9 -u $USER -f '\\-\\-client-id {cid} --container-type' "
+             f"2>/dev/null || true"],
+            timeout=15, check=False,
+        )
+    # DO NOT close the per-cid SSH master here. We pre-establish masters on
+    # BOTH client nodes at startup so future migrations (which may come back
+    # to THIS node) can reuse them instead of paying a fresh-TCP cost and
+    # risking MaxStartups bursts. Masters are only torn down at runner exit
+    # (run_baseline's finally block).
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,80 @@
+2026-05-12 16:28:38,154 - [robot_000] Starting — server=n016.cluster.pssclabs.com:8470 type=gpu_specialist
+INFO flwr 2026-05-12 16:28:40,262 | grpc.py:49 | Opened insecure gRPC connection (no certificates were passed)
+2026-05-12 16:28:40,262 - Opened insecure gRPC connection (no certificates were passed)
+DEBUG flwr 2026-05-12 16:28:40,264 | connection.py:42 | ChannelConnectivity.IDLE
+2026-05-12 16:28:40,264 - ChannelConnectivity.IDLE
+DEBUG flwr 2026-05-12 16:28:40,268 | connection.py:42 | ChannelConnectivity.CONNECTING
+2026-05-12 16:28:40,268 - ChannelConnectivity.CONNECTING
+DEBUG flwr 2026-05-12 16:28:40,282 | connection.py:42 | ChannelConnectivity.READY
+2026-05-12 16:28:40,282 - ChannelConnectivity.READY
+2026-05-12 16:28:42,483 - [robot_000] Round 1: tasks=20 success=0.000 reward=-0.400 loss=0.0000 entropy=0.693 time=2.2s
+2026-05-12 16:28:44,634 - [robot_000] Round 2: tasks=40 success=0.000 reward=-0.400 loss=0.0000 entropy=0.693 time=2.1s
+2026-05-12 16:28:46,795 - [robot_000] Round 3: tasks=60 success=0.000 reward=-0.400 loss=0.0000 entropy=0.693 time=2.1s
+2026-05-12 16:28:50,705 - [robot_000] Round 4: tasks=80 success=0.000 reward=-0.400 loss=-0.3727 entropy=0.693 time=3.8s
+2026-05-12 16:28:54,479 - [robot_000] Round 5: tasks=100 success=0.000 reward=-0.400 loss=-0.3766 entropy=0.693 time=3.7s
+2026-05-12 16:28:59,863 - [robot_000] Round 6: tasks=120 success=0.100 reward=-0.210 loss=-0.3766 entropy=0.693 time=4.4s
+2026-05-12 16:29:28,869 - [robot_000] Round 7: tasks=140 success=0.950 reward=+1.405 loss=-0.0085 entropy=0.693 time=20.5s
+2026-05-12 16:30:17,234 - [robot_000] Round 8: tasks=160 success=0.900 reward=+1.315 loss=-0.0102 entropy=0.693 time=37.2s
+2026-05-12 16:31:00,428 - [robot_000] Round 9: tasks=180 success=0.950 reward=+1.410 loss=-0.0102 entropy=0.693 time=42.3s
+2026-05-12 16:31:58,191 - [robot_000] Round 10: tasks=200 success=0.900 reward=+1.320 loss=-0.0138 entropy=0.693 time=47.9s
+2026-05-12 16:32:14,241 - [robot_000] POLICY LOAD FAILED — /checkpoints/policy_weights.pt not visible in container (load_dir from redis = /checkpoints)
+2026-05-12 16:32:57,603 - [robot_000] Round 11: tasks=220 success=0.950 reward=+1.410 loss=-0.0138 entropy=0.693 time=49.6s
+2026-05-12 16:33:49,866 - [robot_000] Round 12: tasks=240 success=0.900 reward=+1.320 loss=-0.0166 entropy=0.692 time=48.5s
+2026-05-12 16:34:49,659 - [robot_000] Round 13: tasks=260 success=0.900 reward=+1.320 loss=-0.0184 entropy=0.691 time=46.4s
+2026-05-12 16:35:43,919 - [robot_000] Round 14: tasks=280 success=0.900 reward=+1.320 loss=-0.0184 entropy=0.691 time=41.6s
+2026-05-12 16:36:35,838 - [robot_000] Round 15: tasks=300 success=0.900 reward=+1.320 loss=-0.0221 entropy=0.691 time=36.8s
+2026-05-12 16:37:37,601 - [robot_000] Round 16: tasks=320 success=0.950 reward=+1.410 loss=-0.0234 entropy=0.689 time=40.2s
+2026-05-12 16:38:50,344 - [robot_000] Round 17: tasks=340 success=0.850 reward=+1.230 loss=-0.0234 entropy=0.690 time=51.7s
+2026-05-12 16:39:51,756 - [robot_000] Round 18: tasks=360 success=0.800 reward=+1.140 loss=-0.0233 entropy=0.689 time=57.1s
+2026-05-12 16:40:42,062 - [robot_000] Round 19: tasks=380 success=0.900 reward=+1.320 loss=-0.0233 entropy=0.689 time=48.9s
+2026-05-12 16:41:30,283 - [robot_000] Round 20: tasks=400 success=0.900 reward=+1.320 loss=-0.0292 entropy=0.687 time=43.7s
+2026-05-12 16:41:50,236 - [robot_000] POLICY LOAD FAILED — /checkpoints/policy_weights.pt not visible in container (load_dir from redis = /checkpoints)
+2026-05-12 16:42:33,827 - [robot_000] Round 21: tasks=420 success=0.900 reward=+1.320 loss=-0.0282 entropy=0.687 time=50.2s
+2026-05-12 16:43:26,689 - [robot_000] Round 22: tasks=440 success=0.900 reward=+1.320 loss=-0.0282 entropy=0.686 time=46.0s
+2026-05-12 16:44:21,904 - [robot_000] Round 23: tasks=460 success=0.850 reward=+1.230 loss=-0.0310 entropy=0.686 time=48.2s
+2026-05-12 16:45:14,512 - [robot_000] Round 24: tasks=480 success=0.900 reward=+1.320 loss=-0.0317 entropy=0.685 time=46.7s
+2026-05-12 16:46:16,839 - [robot_000] Round 25: tasks=500 success=0.850 reward=+1.230 loss=-0.0317 entropy=0.683 time=51.0s
+2026-05-12 16:47:07,246 - [robot_000] Round 26: tasks=520 success=0.900 reward=+1.320 loss=-0.0311 entropy=0.682 time=48.9s
+2026-05-12 16:47:53,684 - [robot_000] Round 27: tasks=540 success=0.900 reward=+1.320 loss=-0.0311 entropy=0.683 time=42.4s
+2026-05-12 16:48:47,907 - [robot_000] Round 28: tasks=560 success=0.900 reward=+1.320 loss=-0.0391 entropy=0.682 time=42.6s
+2026-05-12 16:49:49,953 - [robot_000] Round 29: tasks=580 success=0.900 reward=+1.320 loss=-0.0332 entropy=0.677 time=49.9s
+2026-05-12 16:50:45,138 - [robot_000] Round 30: tasks=600 success=0.900 reward=+1.320 loss=-0.0332 entropy=0.677 time=53.0s
+2026-05-12 16:50:54,974 - [robot_000] POLICY LOAD FAILED — /checkpoints/policy_weights.pt not visible in container (load_dir from redis = /checkpoints)
+2026-05-12 16:51:32,865 - [robot_000] Round 31: tasks=620 success=0.950 reward=+1.410 loss=-0.0326 entropy=0.677 time=46.6s
+2026-05-12 16:52:25,229 - [robot_000] Round 32: tasks=640 success=0.800 reward=+1.140 loss=-0.0385 entropy=0.671 time=44.1s
+2026-05-12 16:53:17,892 - [robot_000] Round 33: tasks=660 success=0.950 reward=+1.410 loss=-0.0385 entropy=0.671 time=42.4s
+2026-05-12 16:54:10,418 - [robot_000] Round 34: tasks=680 success=0.900 reward=+1.320 loss=-0.0412 entropy=0.671 time=46.0s
+2026-05-12 16:55:04,702 - [robot_000] Round 35: tasks=700 success=0.950 reward=+1.410 loss=-0.0412 entropy=0.671 time=41.9s
+2026-05-12 16:55:53,290 - [robot_000] Round 36: tasks=720 success=0.950 reward=+1.410 loss=-0.0374 entropy=0.671 time=44.3s
+2026-05-12 16:57:00,366 - [robot_000] Round 37: tasks=740 success=0.900 reward=+1.320 loss=-0.0398 entropy=0.664 time=54.5s
+2026-05-12 16:57:58,524 - [robot_000] Round 38: tasks=760 success=0.900 reward=+1.320 loss=-0.0398 entropy=0.665 time=50.9s
+2026-05-12 16:58:54,472 - [robot_000] Round 39: tasks=780 success=0.900 reward=+1.320 loss=-0.0468 entropy=0.663 time=53.9s
+2026-05-12 16:59:58,377 - [robot_000] Round 40: tasks=800 success=0.900 reward=+1.320 loss=-0.0355 entropy=0.655 time=56.8s
+2026-05-12 17:00:06,024 - [robot_000] POLICY LOAD FAILED — /checkpoints/policy_weights.pt not visible in container (load_dir from redis = /checkpoints)
+2026-05-12 17:00:43,290 - [robot_000] Round 41: tasks=820 success=0.950 reward=+1.410 loss=-0.0355 entropy=0.652 time=44.4s
+2026-05-12 17:01:37,048 - [robot_000] Round 42: tasks=840 success=0.900 reward=+1.320 loss=-0.0486 entropy=0.651 time=48.9s
+2026-05-12 17:02:20,946 - [robot_000] Round 43: tasks=860 success=0.950 reward=+1.410 loss=-0.0486 entropy=0.653 time=41.6s
+2026-05-12 17:03:20,566 - [robot_000] Round 44: tasks=880 success=0.850 reward=+1.230 loss=-0.0584 entropy=0.659 time=50.1s
+2026-05-12 17:04:24,511 - [robot_000] Round 45: tasks=900 success=0.850 reward=+1.230 loss=-0.0533 entropy=0.645 time=54.6s
+2026-05-12 17:05:18,310 - [robot_000] Round 46: tasks=920 success=0.850 reward=+1.230 loss=-0.0533 entropy=0.649 time=53.0s
+2026-05-12 17:06:10,798 - [robot_000] Round 47: tasks=940 success=0.900 reward=+1.320 loss=-0.0553 entropy=0.639 time=51.1s
+2026-05-12 17:07:07,244 - [robot_000] POLICY LOAD FAILED — /checkpoints/policy_weights.pt not visible in container (load_dir from redis = /checkpoints)
+2026-05-12 17:07:11,440 - [robot_000] Round 48: tasks=960 success=0.900 reward=+1.320 loss=-0.0593 entropy=0.643 time=54.8s
+2026-05-12 17:08:05,274 - [robot_000] Round 49: tasks=980 success=0.850 reward=+1.230 loss=-0.0593 entropy=0.630 time=42.7s
+2026-05-12 17:09:22,504 - [robot_000] Round 50: tasks=1000 success=0.850 reward=+1.230 loss=-0.0655 entropy=0.626 time=48.5s
+2026-05-12 17:10:26,876 - [robot_000] Round 51: tasks=1020 success=0.850 reward=+1.230 loss=-0.0655 entropy=0.630 time=41.7s
+2026-05-12 17:11:22,067 - [robot_000] Round 52: tasks=1040 success=0.850 reward=+1.230 loss=-0.0604 entropy=0.633 time=44.8s
+2026-05-12 17:12:19,721 - [robot_000] Round 53: tasks=1060 success=0.900 reward=+1.320 loss=-0.0739 entropy=0.620 time=46.3s
+2026-05-12 17:13:21,714 - [robot_000] Round 54: tasks=1080 success=0.850 reward=+1.230 loss=-0.0739 entropy=0.644 time=51.1s
+2026-05-12 17:14:01,706 - [robot_000] Round 55: tasks=1100 success=1.000 reward=+1.500 loss=-0.0589 entropy=0.617 time=30.2s
+2026-05-12 17:15:19,545 - [robot_000] Round 56: tasks=1120 success=0.850 reward=+1.230 loss=-0.0635 entropy=0.608 time=52.0s
+2026-05-12 17:16:15,233 - [robot_000] Round 57: tasks=1140 success=0.900 reward=+1.320 loss=-0.0635 entropy=0.608 time=52.1s
+2026-05-12 17:16:53,051 - [robot_000] Round 58: tasks=1160 success=0.950 reward=+1.410 loss=-0.0673 entropy=0.605 time=37.1s
+2026-05-12 17:17:44,880 - [robot_000] Round 59: tasks=1180 success=0.950 reward=+1.410 loss=-0.0673 entropy=0.600 time=33.5s
+2026-05-12 17:18:49,207 - [robot_000] Round 60: tasks=1200 success=0.900 reward=+1.320 loss=-0.0840 entropy=0.594 time=49.9s
+DEBUG flwr 2026-05-12 17:18:53,624 | connection.py:139 | gRPC channel closed
+2026-05-12 17:18:53,624 - gRPC channel closed
+INFO flwr 2026-05-12 17:18:53,624 | app.py:215 | Disconnect and shut down
+2026-05-12 17:18:53,624 - Disconnect and shut down
+2026-05-12 17:18:53,624 - [robot_000] All FL rounds complete
+2026-05-12 17:18:53,770 - [robot_000] Shutdown complete
