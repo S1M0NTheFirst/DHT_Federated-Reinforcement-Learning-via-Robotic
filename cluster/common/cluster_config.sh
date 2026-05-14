@@ -27,8 +27,8 @@ export CONDA_ENV="base"
 export NUM_CLIENTS=20             # 10 robots × 2 client nodes
 export ROBOTS_PER_NODE=10
 export MIGRATION_OFFSET=10        # client_id * 10 (was 25 on workstation)
-export TOTAL_TASKS=1200           # raised from 1000 so all 5 events fit
-export TOTAL_FL_ROUNDS=60         # 60*20 = 1200 tasks, matches TOTAL_TASKS
+export TOTAL_TASKS=2000           # 100 rounds × 20 tasks/round
+export TOTAL_FL_ROUNDS=100        # bumped from 60 — more samples after the 5 migrations
 
 # --- network ports (chosen to avoid common HPC services) ---
 export FLOWER_PORT=8470

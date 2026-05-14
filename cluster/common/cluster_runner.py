@@ -111,7 +111,10 @@ os.makedirs(_SSH_CTRL_DIR, exist_ok=True)
 _SSH_OPTS = [
     "-o", "StrictHostKeyChecking=no",
     "-o", "BatchMode=yes",
-    "-o", "ConnectTimeout=10",
+    # Bumped 10 → 30: under migration waves we saw mkdir SSH calls hit the
+    # 10s ConnectTimeout, which raised TimeoutExpired out of trigger_fn and
+    # left workers stranded mid-migration (killed-but-not-relaunched).
+    "-o", "ConnectTimeout=30",
 ]
 
 
@@ -126,7 +129,9 @@ def _ssh_opts_for_cid(cid: int) -> list[str]:
     return _SSH_OPTS + [
         "-o", "ControlMaster=auto",
         "-o", f"ControlPath={_cid_ctrl_path(cid)}",
-        "-o", "ControlPersist=10m",
+        # 60s persist (was 10m). Shorter persist means lingering masters
+        # die quickly after runner exits → MOAB marks the job complete faster.
+        "-o", "ControlPersist=60",
     ]
 
 
@@ -140,12 +145,33 @@ def establish_ssh_master(node: str, cid: int) -> None:
 
 
 def close_ssh_master(node: str, cid: int) -> None:
-    """Tear down the persistent master for `cid` on `node`."""
+    """Tear down the persistent master for `cid` on `node`. Non-blocking —
+    fires the ssh -O exit and returns immediately. With 40+ masters to
+    close at shutdown, serial blocking close would take 5-10 minutes if any
+    sockets are slow to respond; fire-and-forget reduces that to ~0s."""
     if is_local_node(node):
         return
     cmd = ["ssh", *_ssh_opts_for_cid(cid), "-O", "exit", node]
-    subprocess.run(cmd, check=False, timeout=10,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def close_all_ssh_masters_fast() -> None:
+    """One-shot nuke: kill every lingering ssh process owned by this user that
+    is in master mode (was forked with -M). Safe to call from EXIT trap as a
+    last resort when close_ssh_master loops are too slow."""
+    try:
+        subprocess.run(
+            ["pkill", "-KILL", "-u", os.environ.get("USER", ""), "-f",
+             "ssh.*ControlPath.*ssh-mux"],
+            check=False, timeout=10,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
 
 
 # Cache the local hostname at import time. Some clusters (CSULB HPC2 included)
@@ -169,18 +195,32 @@ def is_local_node(node: str) -> bool:
     return n_short == _LOCAL_SHORT
 
 def ssh_run(node: str, command: str, *, timeout: int = 60,
-            check: bool = False) -> subprocess.CompletedProcess:
+            check: bool = False, retries: int = 2) -> subprocess.CompletedProcess:
     """Run a remote shell command and capture output. If `node` is the local
     host, runs the command via a local bash subprocess (this cluster refuses
     SSH from a node to itself).
+
+    Retries on TimeoutExpired up to `retries` extra times with 2s backoff —
+    transient sshd MaxStartups bursts during migration waves can cause a
+    single SSH call to stall, and propagating that as TimeoutExpired into
+    trigger_fn strands the worker mid-migration.
     """
     if is_local_node(node):
         return subprocess.run(["bash", "-c", command],
                               capture_output=True, text=True,
                               timeout=timeout, check=check)
     cmd = ["ssh", *_SSH_OPTS, "-n", node, command]
-    return subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=timeout, check=check)
+    last_exc: Optional[BaseException] = None
+    for attempt in range(retries + 1):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout, check=check)
+        except subprocess.TimeoutExpired as e:
+            last_exc = e
+            LOG.warning("[ssh_run] timeout on %s (attempt %d/%d): %s",
+                        node, attempt + 1, retries + 1, command[:80])
+            time.sleep(2)
+    raise last_exc  # type: ignore[misc]
 
 
 def ssh_run_async(node: str, command: str, log_path: str) -> subprocess.Popen:

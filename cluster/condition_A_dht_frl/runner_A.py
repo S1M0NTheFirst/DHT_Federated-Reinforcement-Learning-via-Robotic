@@ -34,7 +34,7 @@ from common.cluster_runner import (
     install_signal_handlers, register_tracked_process, terminate_all_tracked,
     is_local_node,
     launch_robot, kill_robot,
-    establish_ssh_master, close_ssh_master,
+    establish_ssh_master, close_ssh_master, close_all_ssh_masters_fast,
     live_status_loop, post_migration_success_rate,
     rsync_dir, ssh_run, _SSH_OPTS,
 )
@@ -138,14 +138,22 @@ def trigger_dht_migration(cfg: ClusterConfig, r: redis.Redis,
     # is the truthful description of what bundle-transfer migration becomes
     # when the worker process can't be moved. Documented in README.
     rsync_dir(dst_node, dst_chk, src_node, dst_chk, timeout=600)
-    container_load_dir = "/checkpoints"  # worker maps "/checkpoints" → its node-local chk
-    # The worker_robot_client expects load_policy to point at a directory
-    # containing policy_weights.pt — the bundle dir is bind-mounted as
-    # /checkpoints inside the instance, and we copy the dest bundle's files
-    # into that root for simplicity:
-    ssh_run(src_node, f"cp -f {dst_chk}/policy_weights.pt "
-                     f"{dst_chk}/replay_buffer.pkl {dst_chk}/manifest.json "
-                     f"{src_chk}/ 2>/dev/null || true", timeout=15)
+    # The worker writes its bundle to /checkpoints/<robot_id>/policy_weights.pt
+    # (see worker_robot_client.py:151-154), NOT to /checkpoints/ root. The
+    # previous version pointed load_policy at "/checkpoints" so the worker
+    # looked for /checkpoints/policy_weights.pt which never existed → "POLICY
+    # LOAD FAILED". Point it at the actual subdir; the file is already there
+    # because the worker just wrote it (src node = same host the worker runs on).
+    container_load_dir = f"/checkpoints/{robot_id}"
+    # Belt-and-suspenders: also copy the dest bundle's files into the worker's
+    # subdir on src, in case rsync round-trip provided fresher contents (e.g.
+    # FL aggregation happened on dst before we copied back).
+    ssh_run(src_node,
+            f"mkdir -p {src_chk}/{robot_id} && "
+            f"cp -f {dst_chk}/{robot_id}/policy_weights.pt "
+            f"{dst_chk}/{robot_id}/replay_buffer.pkl "
+            f"{dst_chk}/{robot_id}/manifest.json "
+            f"{src_chk}/{robot_id}/ 2>/dev/null || true", timeout=15)
     r.set(f"load_policy:{robot_id}", container_load_dir, ex=600)
     r.set(f"migration_done:{robot_id}", "1", ex=600)
 
@@ -342,6 +350,9 @@ def main() -> int:
         for cid in range(cfg.num_clients):
             for client_node in cfg.client_nodes:
                 close_ssh_master(client_node, cid)
+        time.sleep(2)
+        close_all_ssh_masters_fast()
+        LOG.info("Shutdown complete — exiting runner cleanly.")
     LOG.info("Migration events written: %d → %s",
              writer.event_count, writer.path)
     return 0

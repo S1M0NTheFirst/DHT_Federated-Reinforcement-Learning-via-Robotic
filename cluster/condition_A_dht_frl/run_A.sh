@@ -1,7 +1,7 @@
 #!/bin/bash
 #MSUB -N SwiftBot_A_DHT_FRL
 #MSUB -W group_list=hpc2-coe-users
-#MSUB -l walltime=08:00:00
+#MSUB -l walltime=12:00:00
 #MSUB -l nodes=n016.cluster.pssclabs.com:ppn=8+n017.cluster.pssclabs.com:ppn=8+n018.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 

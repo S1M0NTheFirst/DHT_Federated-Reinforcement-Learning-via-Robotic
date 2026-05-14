@@ -266,4 +266,12 @@ cleanup_all_nodes() {
         fi
     done
     echo ">>> Cleanup complete" | tee -a "$RUNNER_LOG" 2>/dev/null
+
+    # Final failsafe: kill any remaining ssh process owned by this user
+    # whose ControlPath is our PBS-job mux dir. This catches daemonised
+    # masters that ControlPersist hasn't yet timed out. Without this MOAB
+    # can keep the job "Running" for several minutes after the runner is
+    # actually done.
+    pkill -KILL -u "$USER" -f "ssh-mux-${PBS_JOBID:-NOJOB}" 2>/dev/null || true
+    echo ">>> Bash wrapper exiting." | tee -a "$RUNNER_LOG" 2>/dev/null
 }

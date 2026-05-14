@@ -1,0 +1,120 @@
+2026-05-12 17:59:00,480 - [robot_003] Starting — server=n016.cluster.pssclabs.com:8470 type=gpu_specialist
+INFO flwr 2026-05-12 17:59:03,012 | grpc.py:49 | Opened insecure gRPC connection (no certificates were passed)
+2026-05-12 17:59:03,012 - Opened insecure gRPC connection (no certificates were passed)
+DEBUG flwr 2026-05-12 17:59:03,013 | connection.py:42 | ChannelConnectivity.IDLE
+2026-05-12 17:59:03,013 - ChannelConnectivity.IDLE
+DEBUG flwr 2026-05-12 17:59:03,016 | connection.py:42 | ChannelConnectivity.CONNECTING
+2026-05-12 17:59:03,016 - ChannelConnectivity.CONNECTING
+DEBUG flwr 2026-05-12 17:59:03,021 | connection.py:42 | ChannelConnectivity.READY
+2026-05-12 17:59:03,021 - ChannelConnectivity.READY
+2026-05-12 17:59:35,570 - [robot_003] Round 1: tasks=20 success=0.000 reward=-0.400 loss=0.0000 entropy=0.691 time=2.1s
+2026-05-12 17:59:37,714 - [robot_003] Round 2: tasks=40 success=0.000 reward=-0.400 loss=0.0000 entropy=0.691 time=2.1s
+2026-05-12 17:59:39,877 - [robot_003] Round 3: tasks=60 success=0.000 reward=-0.400 loss=0.0000 entropy=0.691 time=2.1s
+2026-05-12 17:59:43,586 - [robot_003] Round 4: tasks=80 success=0.000 reward=-0.400 loss=-0.3587 entropy=0.692 time=3.7s
+2026-05-12 17:59:47,179 - [robot_003] Round 5: tasks=100 success=0.000 reward=-0.400 loss=-0.3623 entropy=0.692 time=3.5s
+2026-05-12 17:59:49,381 - [robot_003] Round 6: tasks=120 success=0.000 reward=-0.400 loss=-0.3623 entropy=0.692 time=2.1s
+2026-05-12 17:59:53,043 - [robot_003] Round 7: tasks=140 success=0.000 reward=-0.400 loss=-0.3657 entropy=0.693 time=3.6s
+2026-05-12 17:59:56,725 - [robot_003] Round 8: tasks=160 success=0.000 reward=-0.400 loss=-0.3693 entropy=0.693 time=3.6s
+2026-05-12 17:59:58,883 - [robot_003] Round 9: tasks=180 success=0.000 reward=-0.400 loss=-0.3693 entropy=0.693 time=2.1s
+2026-05-12 18:00:06,484 - [robot_003] Round 10: tasks=200 success=0.250 reward=+0.075 loss=-0.3729 entropy=0.693 time=7.5s
+2026-05-12 18:00:09,749 - [robot_003] Round 11: tasks=220 success=0.000 reward=-0.400 loss=-0.3729 entropy=0.693 time=2.1s
+2026-05-12 18:01:14,319 - [robot_003] Policy loaded from /checkpoints/robot_003
+2026-05-12 18:01:15,392 - [robot_003] Round 12: tasks=240 success=0.250 reward=+0.085 loss=-0.0091 entropy=0.693 time=51.6s
+2026-05-12 18:01:21,523 - [robot_003] Round 13: tasks=260 success=0.200 reward=-0.020 loss=-0.0102 entropy=0.693 time=6.1s
+2026-05-12 18:02:26,911 - [robot_003] Round 14: tasks=280 success=0.850 reward=+1.225 loss=-0.0102 entropy=0.693 time=48.0s
+2026-05-12 18:03:08,342 - [robot_003] Round 15: tasks=300 success=0.550 reward=+0.650 loss=-0.0115 entropy=0.693 time=38.8s
+2026-05-12 18:04:00,306 - [robot_003] Round 16: tasks=320 success=0.850 reward=+1.225 loss=-0.0123 entropy=0.693 time=46.9s
+2026-05-12 18:04:41,128 - [robot_003] Round 17: tasks=340 success=1.000 reward=+1.500 loss=-0.0123 entropy=0.693 time=31.5s
+2026-05-12 18:06:05,241 - [robot_003] Round 18: tasks=360 success=0.850 reward=+1.230 loss=-0.0131 entropy=0.693 time=53.0s
+2026-05-12 18:07:01,211 - [robot_003] Round 19: tasks=380 success=0.900 reward=+1.320 loss=-0.0131 entropy=0.693 time=49.3s
+2026-05-12 18:07:51,546 - [robot_003] Round 20: tasks=400 success=0.900 reward=+1.320 loss=-0.0150 entropy=0.693 time=47.7s
+2026-05-12 18:08:53,744 - [robot_003] Round 21: tasks=420 success=0.900 reward=+1.320 loss=-0.0190 entropy=0.692 time=52.3s
+2026-05-12 18:09:44,081 - [robot_003] Policy loaded from /checkpoints/robot_003
+2026-05-12 18:09:46,243 - [robot_003] Round 22: tasks=440 success=1.000 reward=+1.500 loss=-0.0190 entropy=0.692 time=46.6s
+2026-05-12 18:10:37,557 - [robot_003] Round 23: tasks=460 success=0.950 reward=+1.410 loss=-0.0216 entropy=0.691 time=44.9s
+2026-05-12 18:11:37,739 - [robot_003] Round 24: tasks=480 success=0.900 reward=+1.320 loss=-0.0243 entropy=0.690 time=50.3s
+2026-05-12 18:12:31,271 - [robot_003] Round 25: tasks=500 success=0.900 reward=+1.320 loss=-0.0243 entropy=0.691 time=45.6s
+2026-05-12 18:13:33,061 - [robot_003] Round 26: tasks=520 success=0.900 reward=+1.320 loss=-0.0276 entropy=0.690 time=51.8s
+2026-05-12 18:14:19,294 - [robot_003] Round 27: tasks=540 success=0.900 reward=+1.320 loss=-0.0276 entropy=0.691 time=46.2s
+2026-05-12 18:15:19,065 - [robot_003] Round 28: tasks=560 success=0.850 reward=+1.230 loss=-0.0308 entropy=0.688 time=53.1s
+2026-05-12 18:16:06,650 - [robot_003] Round 29: tasks=580 success=0.950 reward=+1.410 loss=-0.0317 entropy=0.686 time=46.9s
+2026-05-12 18:17:02,895 - [robot_003] Round 30: tasks=600 success=0.850 reward=+1.230 loss=-0.0317 entropy=0.689 time=50.1s
+2026-05-12 18:17:55,057 - [robot_003] Round 31: tasks=620 success=0.900 reward=+1.320 loss=-0.0322 entropy=0.684 time=45.3s
+2026-05-12 18:18:52,069 - [robot_003] Policy loaded from /checkpoints/robot_003
+2026-05-12 18:18:54,427 - [robot_003] Round 32: tasks=640 success=0.950 reward=+1.410 loss=-0.0427 entropy=0.683 time=50.4s
+2026-05-12 18:19:37,212 - [robot_003] Round 33: tasks=660 success=0.900 reward=+1.320 loss=-0.0427 entropy=0.683 time=42.7s
+2026-05-12 18:20:29,750 - [robot_003] Round 34: tasks=680 success=0.850 reward=+1.230 loss=-0.0386 entropy=0.679 time=48.5s
+2026-05-12 18:21:15,514 - [robot_003] Round 35: tasks=700 success=0.950 reward=+1.410 loss=-0.0386 entropy=0.679 time=33.0s
+2026-05-12 18:22:16,429 - [robot_003] Round 36: tasks=720 success=0.900 reward=+1.320 loss=-0.0520 entropy=0.682 time=44.9s
+2026-05-12 18:23:25,206 - [robot_003] Round 37: tasks=740 success=0.850 reward=+1.230 loss=-0.0448 entropy=0.675 time=60.0s
+2026-05-12 18:24:05,070 - [robot_003] Round 38: tasks=760 success=0.950 reward=+1.410 loss=-0.0448 entropy=0.675 time=39.8s
+2026-05-12 18:25:14,304 - [robot_003] Round 39: tasks=780 success=0.950 reward=+1.410 loss=-0.0553 entropy=0.670 time=53.3s
+2026-05-12 18:26:16,742 - [robot_003] Round 40: tasks=800 success=0.900 reward=+1.320 loss=-0.0469 entropy=0.667 time=57.8s
+2026-05-12 18:27:01,862 - [robot_003] Round 41: tasks=820 success=0.900 reward=+1.320 loss=-0.0469 entropy=0.662 time=44.5s
+2026-05-12 18:27:54,267 - [robot_003] Policy loaded from /checkpoints/robot_003
+2026-05-12 18:28:00,787 - [robot_003] Round 42: tasks=840 success=0.850 reward=+1.230 loss=-0.0605 entropy=0.661 time=51.4s
+2026-05-12 18:28:29,529 - [robot_003] Round 43: tasks=860 success=1.000 reward=+1.500 loss=-0.0605 entropy=0.656 time=26.8s
+2026-05-12 18:29:51,963 - [robot_003] Round 44: tasks=880 success=0.850 reward=+1.230 loss=-0.0623 entropy=0.654 time=53.1s
+2026-05-12 18:30:49,323 - [robot_003] Round 45: tasks=900 success=0.900 reward=+1.320 loss=-0.0735 entropy=0.659 time=50.0s
+2026-05-12 18:31:38,212 - [robot_003] Round 46: tasks=920 success=0.950 reward=+1.410 loss=-0.0735 entropy=0.655 time=40.1s
+2026-05-12 18:32:43,443 - [robot_003] Round 47: tasks=940 success=0.950 reward=+1.410 loss=-0.0763 entropy=0.628 time=49.9s
+2026-05-12 18:33:33,429 - [robot_003] Round 48: tasks=960 success=0.900 reward=+1.320 loss=-0.0708 entropy=0.635 time=46.8s
+2026-05-12 18:34:30,987 - [robot_003] Round 49: tasks=980 success=0.900 reward=+1.320 loss=-0.0708 entropy=0.635 time=43.4s
+2026-05-12 18:35:11,536 - [robot_003] Policy loaded from /checkpoints/robot_003
+2026-05-12 18:35:38,886 - [robot_003] Round 50: tasks=1000 success=1.000 reward=+1.500 loss=-0.0733 entropy=0.629 time=40.0s
+2026-05-12 18:36:54,405 - [robot_003] Round 51: tasks=1020 success=0.850 reward=+1.230 loss=-0.0733 entropy=0.626 time=47.3s
+2026-05-12 18:37:49,137 - [robot_003] Round 52: tasks=1040 success=0.900 reward=+1.320 loss=-0.0871 entropy=0.603 time=48.7s
+2026-05-12 18:38:47,386 - [robot_003] Round 53: tasks=1060 success=0.950 reward=+1.410 loss=-0.0984 entropy=0.607 time=45.1s
+2026-05-12 18:39:47,817 - [robot_003] Round 54: tasks=1080 success=0.950 reward=+1.410 loss=-0.0984 entropy=0.605 time=44.1s
+2026-05-12 18:40:44,881 - [robot_003] Round 55: tasks=1100 success=0.950 reward=+1.410 loss=-0.0955 entropy=0.592 time=45.7s
+2026-05-12 18:41:46,498 - [robot_003] Round 56: tasks=1120 success=0.800 reward=+1.140 loss=-0.0964 entropy=0.580 time=53.7s
+2026-05-12 18:42:34,356 - [robot_003] Round 57: tasks=1140 success=0.900 reward=+1.320 loss=-0.0964 entropy=0.562 time=47.3s
+2026-05-12 18:43:18,486 - [robot_003] Round 58: tasks=1160 success=0.950 reward=+1.410 loss=-0.1157 entropy=0.581 time=36.0s
+2026-05-12 18:44:16,235 - [robot_003] Round 59: tasks=1180 success=0.900 reward=+1.320 loss=-0.1157 entropy=0.595 time=39.7s
+2026-05-12 18:45:18,940 - [robot_003] Round 60: tasks=1200 success=0.850 reward=+1.230 loss=-0.0970 entropy=0.559 time=56.5s
+2026-05-12 18:46:09,627 - [robot_003] Round 61: tasks=1220 success=0.850 reward=+1.230 loss=-0.0997 entropy=0.559 time=49.2s
+2026-05-12 18:46:54,796 - [robot_003] Round 62: tasks=1240 success=0.900 reward=+1.320 loss=-0.0997 entropy=0.540 time=44.3s
+2026-05-12 18:47:42,480 - [robot_003] Round 63: tasks=1260 success=0.950 reward=+1.410 loss=-0.1258 entropy=0.518 time=40.8s
+2026-05-12 18:48:43,598 - [robot_003] Round 64: tasks=1280 success=0.900 reward=+1.320 loss=-0.1173 entropy=0.528 time=44.5s
+2026-05-12 18:49:35,178 - [robot_003] Round 65: tasks=1300 success=0.900 reward=+1.320 loss=-0.1173 entropy=0.528 time=48.3s
+2026-05-12 18:50:24,696 - [robot_003] Round 66: tasks=1320 success=0.900 reward=+1.320 loss=-0.1329 entropy=0.501 time=49.1s
+2026-05-12 18:51:10,886 - [robot_003] Round 67: tasks=1340 success=0.950 reward=+1.410 loss=-0.1329 entropy=0.530 time=41.5s
+2026-05-12 18:52:09,479 - [robot_003] Round 68: tasks=1360 success=0.950 reward=+1.410 loss=-0.1407 entropy=0.528 time=47.3s
+2026-05-12 18:53:07,793 - [robot_003] Round 69: tasks=1380 success=0.950 reward=+1.410 loss=-0.1327 entropy=0.500 time=51.7s
+2026-05-12 18:53:54,835 - [robot_003] Round 70: tasks=1400 success=0.900 reward=+1.320 loss=-0.1327 entropy=0.469 time=46.8s
+2026-05-12 18:54:43,558 - [robot_003] Round 71: tasks=1420 success=0.900 reward=+1.320 loss=-0.1557 entropy=0.445 time=45.0s
+2026-05-12 18:55:41,687 - [robot_003] Round 72: tasks=1440 success=0.900 reward=+1.320 loss=-0.1558 entropy=0.425 time=53.6s
+2026-05-12 18:56:29,695 - [robot_003] Round 73: tasks=1460 success=0.850 reward=+1.230 loss=-0.1558 entropy=0.447 time=47.7s
+2026-05-12 18:57:15,144 - [robot_003] Round 74: tasks=1480 success=0.900 reward=+1.320 loss=-0.1558 entropy=0.474 time=45.4s
+2026-05-12 18:58:05,372 - [robot_003] Round 75: tasks=1500 success=0.900 reward=+1.320 loss=-0.1558 entropy=0.461 time=44.5s
+2026-05-12 18:59:03,618 - [robot_003] Round 76: tasks=1520 success=0.900 reward=+1.320 loss=-0.1258 entropy=0.452 time=50.4s
+2026-05-12 19:00:06,081 - [robot_003] Round 77: tasks=1540 success=0.900 reward=+1.320 loss=-0.1290 entropy=0.406 time=56.7s
+2026-05-12 19:00:51,253 - [robot_003] Round 78: tasks=1560 success=0.950 reward=+1.410 loss=-0.1290 entropy=0.392 time=44.7s
+2026-05-12 19:02:00,257 - [robot_003] Round 79: tasks=1580 success=0.900 reward=+1.320 loss=-0.1726 entropy=0.391 time=59.6s
+2026-05-12 19:02:54,576 - [robot_003] Round 80: tasks=1600 success=0.900 reward=+1.320 loss=-0.1489 entropy=0.408 time=54.3s
+2026-05-12 19:03:50,446 - [robot_003] Round 81: tasks=1620 success=0.850 reward=+1.230 loss=-0.1489 entropy=0.401 time=54.7s
+2026-05-12 19:04:34,274 - [robot_003] Round 82: tasks=1640 success=0.900 reward=+1.320 loss=-0.1816 entropy=0.347 time=43.8s
+2026-05-12 19:05:34,134 - [robot_003] Round 83: tasks=1660 success=0.900 reward=+1.320 loss=-0.1816 entropy=0.402 time=47.7s
+2026-05-12 19:06:40,079 - [robot_003] Round 84: tasks=1680 success=0.850 reward=+1.230 loss=-0.1661 entropy=0.352 time=56.1s
+2026-05-12 19:07:33,041 - [robot_003] Round 85: tasks=1700 success=0.950 reward=+1.410 loss=-0.1438 entropy=0.320 time=49.8s
+2026-05-12 19:08:27,008 - [robot_003] Round 86: tasks=1720 success=0.950 reward=+1.410 loss=-0.1438 entropy=0.376 time=49.4s
+2026-05-12 19:09:17,843 - [robot_003] Round 87: tasks=1740 success=0.900 reward=+1.320 loss=-0.1743 entropy=0.379 time=50.8s
+2026-05-12 19:09:58,431 - [robot_003] Round 88: tasks=1760 success=0.950 reward=+1.410 loss=-0.1997 entropy=0.305 time=37.7s
+2026-05-12 19:11:01,186 - [robot_003] Round 89: tasks=1780 success=0.900 reward=+1.320 loss=-0.1997 entropy=0.294 time=46.6s
+2026-05-12 19:12:00,559 - [robot_003] Round 90: tasks=1800 success=0.850 reward=+1.230 loss=-0.1518 entropy=0.345 time=57.5s
+2026-05-12 19:12:36,795 - [robot_003] Round 91: tasks=1820 success=0.900 reward=+1.320 loss=-0.1518 entropy=0.358 time=36.2s
+2026-05-12 19:13:35,211 - [robot_003] Round 92: tasks=1840 success=0.950 reward=+1.410 loss=-0.1505 entropy=0.350 time=47.4s
+2026-05-12 19:14:14,890 - [robot_003] Round 93: tasks=1860 success=0.950 reward=+1.410 loss=-0.1663 entropy=0.313 time=38.3s
+2026-05-12 19:15:24,273 - [robot_003] Round 94: tasks=1880 success=0.900 reward=+1.320 loss=-0.1663 entropy=0.311 time=53.3s
+2026-05-12 19:16:20,765 - [robot_003] Round 95: tasks=1900 success=0.950 reward=+1.410 loss=-0.2063 entropy=0.290 time=52.6s
+2026-05-12 19:17:07,982 - [robot_003] Round 96: tasks=1920 success=0.950 reward=+1.410 loss=-0.2274 entropy=0.355 time=46.0s
+2026-05-12 19:18:05,934 - [robot_003] Round 97: tasks=1940 success=0.850 reward=+1.230 loss=-0.2274 entropy=0.289 time=51.6s
+2026-05-12 19:18:57,600 - [robot_003] Round 98: tasks=1960 success=0.950 reward=+1.410 loss=-0.1695 entropy=0.290 time=49.0s
+2026-05-12 19:19:54,483 - [robot_003] Round 99: tasks=1980 success=0.900 reward=+1.320 loss=-0.1695 entropy=0.269 time=51.6s
+2026-05-12 19:20:52,257 - [robot_003] Round 100: tasks=2000 success=0.950 reward=+1.410 loss=-0.2076 entropy=0.278 time=56.0s
+DEBUG flwr 2026-05-12 19:20:53,952 | connection.py:139 | gRPC channel closed
+2026-05-12 19:20:53,952 - gRPC channel closed
+INFO flwr 2026-05-12 19:20:53,952 | app.py:215 | Disconnect and shut down
+2026-05-12 19:20:53,952 - Disconnect and shut down
+2026-05-12 19:20:53,952 - [robot_003] All FL rounds complete
+2026-05-12 19:20:54,147 - [robot_003] Shutdown complete

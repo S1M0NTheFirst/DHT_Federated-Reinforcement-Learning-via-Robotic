@@ -25,8 +25,9 @@ from .cluster_runner import (
     install_signal_handlers, terminate_all_tracked,
     launch_robot, kill_robot,
     live_status_loop, ssh_run,
-    establish_ssh_master, close_ssh_master,
+    establish_ssh_master, close_ssh_master, close_all_ssh_masters_fast,
 )
+import traceback
 
 LOG = logging.getLogger("baseline")
 
@@ -104,7 +105,7 @@ def run_baseline(
 
     threading.Thread(
         target=_migration_loop,
-        args=(cfg, r, writer, trigger_fn),
+        args=(cfg, r, writer, trigger_fn, image, worker_script),
         daemon=True,
     ).start()
     threading.Thread(
@@ -123,19 +124,55 @@ def run_baseline(
         # gives us a clear log line and guarantees cleanup even if the
         # interpreter is shut down abnormally.
         terminate_all_tracked(hard_after=5.0)
-        # Close every per-cid SSH master so ControlPersist=10m doesn't leave
-        # daemonised ssh processes lingering. Close on BOTH client nodes
-        # because the robot may have migrated and have masters on either.
+        # Close every per-cid SSH master (fire-and-forget). Then nuke any
+        # stragglers so the bash wrapper can exit quickly and MOAB marks the
+        # job complete.
         for cid in range(cfg.num_clients):
             for client_node in cfg.client_nodes:
                 close_ssh_master(client_node, cid)
+        time.sleep(2)  # let the -O exit messages reach the masters
+        close_all_ssh_masters_fast()
+        LOG.info("Shutdown complete — exiting runner cleanly.")
     LOG.info("Migration events written: %d → %s", writer.event_count, writer.path)
     return 0
 
 
+def _recover_stranded_robot(cfg: ClusterConfig, r: redis.Redis, robot_id: str,
+                            image: str, worker_script: str) -> None:
+    """Force-progress a robot whose trigger_fn raised mid-migration. Kill on
+    current src node (in case the worker is still sleeping there waiting for
+    SIGTERM), then relaunch on the other node so it keeps running and will
+    eventually set robot_done. Without this, an SSH timeout during the
+    trigger_fn leaves the worker stranded and _wait_for_completion hangs."""
+    try:
+        cid = int(robot_id.split("_")[1])
+        src = current_node(robot_id)
+        dst = cfg.other_node(src)
+        LOG.warning("[Recover] %s: force kill on %s then relaunch on %s",
+                    robot_id, src, dst)
+        try:
+            kill_robot(cfg, src, cid)
+        except Exception as e:
+            LOG.error("[Recover] kill_robot %s failed: %r", robot_id, e)
+        time.sleep(2)
+        try:
+            launch_robot(cfg, dst, cid, image, worker_script)
+            update_node(robot_id, dst)
+            r.set(f"migration_done:{robot_id}", "1", ex=600)
+            LOG.warning("[Recover] %s relaunched on %s (no metrics row)",
+                        robot_id, dst)
+        except Exception as e:
+            LOG.error("[Recover] launch_robot %s on %s failed: %r — robot lost",
+                      robot_id, dst, e)
+            r.set(f"robot_done:{robot_id}", "1")
+    except Exception as e:
+        LOG.error("[Recover] unhandled failure for %s: %r", robot_id, e)
+
+
 def _migration_loop(cfg: ClusterConfig, r: redis.Redis,
                     writer: MigrationMetricsWriter,
-                    trigger_fn: Callable) -> None:
+                    trigger_fn: Callable,
+                    image: str, worker_script: str) -> None:
     LOG.info("[Monitor] watching for migration requests")
     while True:
         try:
@@ -146,12 +183,23 @@ def _migration_loop(cfg: ClusterConfig, r: redis.Redis,
                 info = json.loads(raw)
                 robot_id = info["robot_id"]
                 r.delete(key)
-                metrics = trigger_fn(
-                    cfg, r, robot_id,
-                    float(info.get("success_rate", 0)),
-                    int(info.get("task_counter", 0)),
-                )
-                writer.write_event(metrics)
+                try:
+                    metrics = trigger_fn(
+                        cfg, r, robot_id,
+                        float(info.get("success_rate", 0)),
+                        int(info.get("task_counter", 0)),
+                    )
+                    writer.write_event(metrics)
+                except Exception as e:
+                    # trigger_fn failed mid-migration (typically SSH timeout
+                    # during the dump/rsync step). The worker may still be
+                    # sleeping on src waiting for kill, so it will never set
+                    # robot_done and the runner would hang. Recover by force
+                    # kill+relaunch on the other node so the experiment
+                    # continues, then skip writing this event.
+                    LOG.error("[Monitor] trigger_fn failed for %s: %r\n%s",
+                              robot_id, e, traceback.format_exc())
+                    _recover_stranded_robot(cfg, r, robot_id, image, worker_script)
                 # Throttle: spread out migration relaunches so multiple fresh
                 # TCPs to the same dst node don't pile up and trip sshd's
                 # MaxStartups rate limit. Saw 5-6 robots/run die during the
@@ -163,12 +211,26 @@ def _migration_loop(cfg: ClusterConfig, r: redis.Redis,
         time.sleep(1)
 
 
-def _wait_for_completion(cfg: ClusterConfig, r: redis.Redis) -> None:
+def _wait_for_completion(cfg: ClusterConfig, r: redis.Redis,
+                         stall_timeout_s: int = 1200) -> None:
+    """Wait for every robot to set robot_done in redis. If the done-count
+    stops advancing for `stall_timeout_s` seconds we give up rather than hang
+    the MOAB job forever — better to lose 1-2 stuck robots than the whole run.
+    """
     LOG.info("[Wait] waiting for all %d robots to finish", cfg.num_clients)
+    last_done = -1
+    last_change = time.time()
     while True:
         done = sum(1 for cid in range(cfg.num_clients)
                    if r.get(f"robot_done:robot_{cid:03d}"))
         if done >= cfg.num_clients:
             LOG.info("[Wait] all robots done.")
+            return
+        if done != last_done:
+            last_done = done
+            last_change = time.time()
+        elif time.time() - last_change > stall_timeout_s:
+            LOG.error("[Wait] %d/%d robots done — no progress for %ds, giving up",
+                      done, cfg.num_clients, stall_timeout_s)
             return
         time.sleep(15)
