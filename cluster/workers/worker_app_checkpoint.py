@@ -120,7 +120,12 @@ def _save_state(model, optimizer, replay_buffer, task_counter, success_hist, pat
 
 
 def _load_state(path):
-    return torch.load(path, map_location="cpu")
+    # weights_only=False: our checkpoint contains numpy RNG state (a tuple
+    # with numpy.ndarray inside), which PyTorch 2.6+ rejects under the new
+    # weights_only=True default. The file is ours and trusted, so explicitly
+    # opt out — otherwise restore fails with UnpicklingError and the worker
+    # dies before publishing app_restore_done.
+    return torch.load(path, map_location="cpu", weights_only=False)
 
 
 def _publish(r, key: str, payload: dict, ttl: int = 600):

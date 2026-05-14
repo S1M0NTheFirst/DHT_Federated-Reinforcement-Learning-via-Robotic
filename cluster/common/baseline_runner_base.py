@@ -212,13 +212,15 @@ def _migration_loop(cfg: ClusterConfig, r: redis.Redis,
 
 
 def _wait_for_completion(cfg: ClusterConfig, r: redis.Redis,
-                         stall_timeout_s: int = 1200) -> None:
-    """Wait for every robot to set robot_done in redis. If the done-count
-    stops advancing for `stall_timeout_s` seconds we give up rather than hang
-    the MOAB job forever — better to lose 1-2 stuck robots than the whole run.
+                         stall_timeout_s: int = 1800) -> None:
+    """Wait for every robot to set robot_done in redis. The stall guard only
+    activates AFTER the first robot finishes — before that, done=0 is
+    expected (cold start through 2000 tasks takes ~40 min). Once at least
+    one robot completes, if no further progress is made for stall_timeout_s,
+    we give up rather than hang the MOAB job forever.
     """
     LOG.info("[Wait] waiting for all %d robots to finish", cfg.num_clients)
-    last_done = -1
+    last_done = 0
     last_change = time.time()
     while True:
         done = sum(1 for cid in range(cfg.num_clients)
@@ -229,7 +231,7 @@ def _wait_for_completion(cfg: ClusterConfig, r: redis.Redis,
         if done != last_done:
             last_done = done
             last_change = time.time()
-        elif time.time() - last_change > stall_timeout_s:
+        elif done > 0 and time.time() - last_change > stall_timeout_s:
             LOG.error("[Wait] %d/%d robots done — no progress for %ds, giving up",
                       done, cfg.num_clients, stall_timeout_s)
             return

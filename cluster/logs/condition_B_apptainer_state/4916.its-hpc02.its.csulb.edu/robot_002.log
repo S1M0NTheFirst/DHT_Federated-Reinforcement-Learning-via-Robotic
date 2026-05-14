@@ -1,0 +1,32 @@
+2026-05-14 10:41:14,347 - [robot_002] Random policy worker started (Cold Restart baseline)
+2026-05-14 10:41:14,348 - [robot_002] Tasks: 0/2000 success_rate=0.000
+2026-05-14 10:44:02,856 - [robot_002] Tasks: 100/2000 success_rate=0.500
+2026-05-14 10:46:22,419 - [robot_002] Tasks: 200/2000 success_rate=0.400
+2026-05-14 10:46:47,074 - [robot_002] migration requested at task 220, sleeping until runner kills me
+2026-05-14 10:49:20,985 - [robot_002] Resuming after cold restart at task 221 (NO state preserved — random policy fresh)
+2026-05-14 10:51:17,267 - [robot_002] Tasks: 300/2000 success_rate=0.300
+2026-05-14 10:54:06,513 - [robot_002] Tasks: 400/2000 success_rate=0.500
+2026-05-14 10:55:02,513 - [robot_002] migration requested at task 420, sleeping until runner kills me
+2026-05-14 10:55:38,389 - [robot_002] Resuming after cold restart at task 421 (NO state preserved — random policy fresh)
+2026-05-14 10:55:42,716 - [robot_002] Tasks: 500/2000 success_rate=0.500
+2026-05-14 10:55:48,990 - [robot_002] Tasks: 600/2000 success_rate=0.600
+2026-05-14 10:55:50,811 - [robot_002] migration requested at task 620, sleeping until runner kills me
+2026-05-14 10:56:48,342 - [robot_002] Resuming after cold restart at task 621 (NO state preserved — random policy fresh)
+2026-05-14 10:58:42,457 - [robot_002] Tasks: 700/2000 success_rate=0.600
+2026-05-14 11:00:07,451 - [robot_002] Tasks: 800/2000 success_rate=0.600
+2026-05-14 11:00:46,814 - [robot_002] migration requested at task 820, sleeping until runner kills me
+2026-05-14 11:03:15,823 - [robot_002] Resuming after cold restart at task 821 (NO state preserved — random policy fresh)
+2026-05-14 11:03:37,889 - [robot_002] Tasks: 900/2000 success_rate=0.700
+2026-05-14 11:03:55,062 - [robot_002] migration requested at task 970, sleeping until runner kills me
+2026-05-14 11:07:51,583 - [robot_002] Resuming after cold restart at task 971 (NO state preserved — random policy fresh)
+2026-05-14 11:07:55,305 - [robot_002] Tasks: 1000/2000 success_rate=0.400
+2026-05-14 11:08:19,271 - [robot_002] Tasks: 1100/2000 success_rate=0.600
+2026-05-14 11:09:53,035 - [robot_002] Tasks: 1200/2000 success_rate=0.600
+2026-05-14 11:11:58,901 - [robot_002] Tasks: 1300/2000 success_rate=0.200
+2026-05-14 11:13:45,868 - [robot_002] Tasks: 1400/2000 success_rate=0.500
+2026-05-14 11:15:52,445 - [robot_002] Tasks: 1500/2000 success_rate=0.400
+2026-05-14 11:18:13,413 - [robot_002] Tasks: 1600/2000 success_rate=0.500
+2026-05-14 11:20:51,969 - [robot_002] Tasks: 1700/2000 success_rate=0.600
+2026-05-14 11:21:54,669 - [robot_002] Tasks: 1800/2000 success_rate=0.600
+2026-05-14 11:23:35,916 - [robot_002] Tasks: 1900/2000 success_rate=0.700
+2026-05-14 11:24:27,605 - [robot_002] Complete.

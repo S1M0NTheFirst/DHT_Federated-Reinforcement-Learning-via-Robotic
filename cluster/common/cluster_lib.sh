@@ -65,14 +65,28 @@ pick_alive_nodes() {
             echo "  $n LOCAL (self) — included" | tee -a "$RUNNER_LOG"
             continue
         fi
-        local ssh_err
-        ssh_err=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes \
-                      "$n" "echo alive" 2>&1)
-        if [[ "$ssh_err" == "alive" ]]; then
+        # Retry the probe 4 times with backoff. A single failure is usually
+        # transient sshd MaxStartups rate-limiting after a previous job, not
+        # a dead node. Without this, one rate-limited probe fails the whole
+        # submission with "FATAL: need ≥3 alive nodes".
+        local ssh_err alive="no" attempt
+        for attempt in 1 2 3 4; do
+            ssh_err=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes \
+                          "$n" "echo alive" 2>&1)
+            if [[ "$ssh_err" == "alive" ]]; then
+                alive="yes"
+                break
+            fi
+            echo "  $n probe attempt $attempt failed: ${ssh_err:-<empty>}" \
+                | tee -a "$RUNNER_LOG"
+            sleep $((attempt * 5))
+        done
+        if [[ "$alive" == "yes" ]]; then
             ALIVE_NODES+=("$n")
             echo "  $n ALIVE" | tee -a "$RUNNER_LOG"
         else
-            echo "  $n DEAD — dropped (ssh said: ${ssh_err:-<empty>})" | tee -a "$RUNNER_LOG"
+            echo "  $n DEAD — dropped after 4 attempts (last: ${ssh_err:-<empty>})" \
+                | tee -a "$RUNNER_LOG"
         fi
     done
     if [[ ${#ALIVE_NODES[@]} -lt 3 ]]; then
