@@ -160,7 +160,12 @@ def main():
         np.random.set_state(ckpt["np_rng_state"])
         torch.set_rng_state(ckpt["torch_rng_state"])
         success_hist = ckpt.get("success_hist", [])
-        start_counter = ckpt.get("task_counter", start_counter)
+        # The saved task_counter IS the migration task — we already triggered
+        # migration at that step. If we resume at the same value, the next
+        # iteration of the for-loop sees `task_counter in forced` again and
+        # fires another migration immediately, creating an infinite loop.
+        # Advance past it so we continue with the NEXT real task.
+        start_counter = ckpt.get("task_counter", start_counter) + 1
         load_ms = (time.perf_counter() - t0) * 1000
         size_mb = os.path.getsize(APP_RESTORE_FROM) / (1024 * 1024)
         _publish(r, f"app_restore_done:{robot_id}",
