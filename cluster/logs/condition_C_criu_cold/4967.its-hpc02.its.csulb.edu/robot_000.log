@@ -1,0 +1,33 @@
+2026-05-15 16:45:02,602 - [robot_000] Started fresh (app_ckpt=/checkpoints/state.pt, warm=off/0)
+2026-05-15 16:45:02,606 - [robot_000] Tasks: 0/2000 success_rate=0.000
+2026-05-15 16:47:45,276 - [robot_000] Tasks: 100/2000 success_rate=0.500
+2026-05-15 16:49:33,045 - [robot_000] App-checkpoint saved (134.7ms, 17.17MB)
+2026-05-15 16:49:33,049 - [robot_000] migration requested at task 200, sleeping until runner kills me
+2026-05-15 16:54:42,797 - [robot_000] Restored from /checkpoints/state.pt (737.9ms, 17.17MB) → resuming at task 201
+2026-05-15 17:03:04,521 - [robot_000] Tasks: 300/2000 success_rate=0.400
+2026-05-15 17:11:02,637 - [robot_000] App-checkpoint saved (635.2ms, 17.18MB)
+2026-05-15 17:11:02,667 - [robot_000] migration requested at task 400, sleeping until runner kills me
+2026-05-15 17:11:17,162 - [robot_000] Restored from /checkpoints/state.pt (16.3ms, 17.18MB) → resuming at task 401
+2026-05-15 17:11:22,186 - [robot_000] Tasks: 500/2000 success_rate=0.400
+2026-05-15 17:11:27,323 - [robot_000] App-checkpoint saved (66.0ms, 17.18MB)
+2026-05-15 17:11:27,324 - [robot_000] migration requested at task 600, sleeping until runner kills me
+2026-05-15 17:13:06,117 - [robot_000] Restored from /checkpoints/state.pt (968.2ms, 17.18MB) → resuming at task 601
+2026-05-15 17:22:26,105 - [robot_000] Tasks: 700/2000 success_rate=0.500
+2026-05-15 17:28:26,728 - [robot_000] App-checkpoint saved (120.8ms, 17.18MB)
+2026-05-15 17:28:26,729 - [robot_000] migration requested at task 800, sleeping until runner kills me
+2026-05-15 17:31:18,369 - [robot_000] Restored from /checkpoints/state.pt (31.0ms, 17.18MB) → resuming at task 801
+2026-05-15 17:31:25,014 - [robot_000] Tasks: 900/2000 success_rate=0.500
+2026-05-15 17:31:28,478 - [robot_000] App-checkpoint saved (71.2ms, 17.18MB)
+2026-05-15 17:31:28,480 - [robot_000] migration requested at task 950, sleeping until runner kills me
+2026-05-15 17:36:54,217 - [robot_000] Restored from /checkpoints/state.pt (851.5ms, 17.18MB) → resuming at task 951
+2026-05-15 17:46:35,483 - [robot_000] Tasks: 1000/2000 success_rate=0.500
+2026-05-15 18:01:12,481 - [robot_000] Tasks: 1100/2000 success_rate=0.400
+2026-05-15 18:10:35,509 - [robot_000] Tasks: 1200/2000 success_rate=0.600
+2026-05-15 18:22:14,702 - [robot_000] Tasks: 1300/2000 success_rate=0.400
+2026-05-15 18:33:58,584 - [robot_000] Tasks: 1400/2000 success_rate=0.400
+2026-05-15 18:52:13,784 - [robot_000] Tasks: 1500/2000 success_rate=0.400
+2026-05-15 19:05:17,435 - [robot_000] Tasks: 1600/2000 success_rate=0.300
+2026-05-15 19:15:24,807 - [robot_000] Tasks: 1700/2000 success_rate=0.600
+2026-05-15 19:30:38,786 - [robot_000] Tasks: 1800/2000 success_rate=0.100
+2026-05-15 19:37:16,338 - [robot_000] Tasks: 1900/2000 success_rate=0.400
+2026-05-15 19:42:36,063 - [robot_000] Complete.

@@ -208,11 +208,16 @@ def main():
                 logger.info(f"[{robot_id}] App-checkpoint saved "
                             f"({save_ms:.1f}ms, {size_mb:.2f}MB)")
 
+            # 1h TTL: when many robots request migration in the same wave
+            # the runner's serial trigger_fn (≈90s each) can take 15+ minutes
+            # to drain the queue. With ex=600 (10 min), tail-of-queue requests
+            # silently expired before being processed and the worker sat in
+            # the sleep-forever loop below with no one to kill it.
             r.set(f"migration_request:{robot_id}", json.dumps({
                 "robot_id":     robot_id,
                 "success_rate": sr,
                 "task_counter": task_counter,
-            }), ex=600)
+            }), ex=3600)
             logger.info(f"[{robot_id}] migration requested at task {task_counter}, "
                         f"sleeping until runner kills me")
             while True:

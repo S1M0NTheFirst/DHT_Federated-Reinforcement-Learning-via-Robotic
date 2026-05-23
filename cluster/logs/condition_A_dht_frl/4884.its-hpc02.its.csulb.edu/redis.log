@@ -1,0 +1,119 @@
+233929:C 12 May 2026 17:56:06.933 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+233929:C 12 May 2026 17:56:06.933 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+233929:C 12 May 2026 17:56:06.933 * Redis version=8.6.2, bits=64, commit=f312bec6, modified=0, pid=233929, just started
+233929:C 12 May 2026 17:56:06.933 * Configuration loaded
+233929:M 12 May 2026 17:56:06.934 * monotonic clock: POSIX clock_gettime
+233929:M 12 May 2026 17:56:06.934 * Running mode=standalone, port=6379.
+233929:M 12 May 2026 17:56:06.934 * Server initialized
+233929:M 12 May 2026 17:56:06.936 * Loading RDB produced by version 8.6.2
+233929:M 12 May 2026 17:56:06.936 * RDB age 2088 seconds
+233929:M 12 May 2026 17:56:06.936 * RDB memory usage when created 8.47 Mb
+233929:M 12 May 2026 17:56:06.957 * Done loading RDB, keys loaded: 1, keys expired: 11.
+233929:M 12 May 2026 17:56:06.958 * DB loaded from disk: 0.023 seconds
+233929:M 12 May 2026 17:56:06.958 * Ready to accept connections tcp
+233929:M 12 May 2026 17:56:06.958 # WARNING: Redis does not require authentication and is not protected by network restrictions. Redis will accept connections from any IP address on any network interface.
+233929:M 12 May 2026 17:56:10.890 * BGSAVE done, 0 keys saved, 0 keys skipped, 88 bytes written.
+233929:M 12 May 2026 17:56:10.893 * DB saved on disk
+233929:M 12 May 2026 18:01:11.065 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:01:11.066 * Background saving started by pid 234743
+234743:C 12 May 2026 18:01:11.073 * BGSAVE done, 26 keys saved, 0 keys skipped, 244551 bytes written.
+234743:C 12 May 2026 18:01:11.080 * DB saved on disk
+234743:C 12 May 2026 18:01:11.081 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:01:11.166 * Background saving terminated with success
+233929:M 12 May 2026 18:06:12.043 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:06:12.043 * Background saving started by pid 235304
+235304:C 12 May 2026 18:06:12.051 * BGSAVE done, 39 keys saved, 0 keys skipped, 401096 bytes written.
+235304:C 12 May 2026 18:06:12.060 * DB saved on disk
+235304:C 12 May 2026 18:06:12.061 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:06:12.145 * Background saving terminated with success
+233929:M 12 May 2026 18:11:13.045 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:11:13.046 * Background saving started by pid 235616
+235616:C 12 May 2026 18:11:13.055 * BGSAVE done, 41 keys saved, 0 keys skipped, 554494 bytes written.
+235616:C 12 May 2026 18:11:13.065 * DB saved on disk
+235616:C 12 May 2026 18:11:13.066 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:11:13.146 * Background saving terminated with success
+233929:M 12 May 2026 18:16:14.026 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:16:14.026 * Background saving started by pid 235974
+235974:C 12 May 2026 18:16:14.037 * BGSAVE done, 42 keys saved, 0 keys skipped, 708114 bytes written.
+235974:C 12 May 2026 18:16:14.049 * DB saved on disk
+235974:C 12 May 2026 18:16:14.049 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:16:14.127 * Background saving terminated with success
+233929:M 12 May 2026 18:21:15.010 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:21:15.011 * Background saving started by pid 236289
+236289:C 12 May 2026 18:21:15.021 * BGSAVE done, 41 keys saved, 0 keys skipped, 866736 bytes written.
+236289:C 12 May 2026 18:21:15.034 * DB saved on disk
+236289:C 12 May 2026 18:21:15.035 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:21:15.112 * Background saving terminated with success
+233929:M 12 May 2026 18:26:16.087 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:26:16.088 * Background saving started by pid 236602
+236602:C 12 May 2026 18:26:16.100 * BGSAVE done, 41 keys saved, 0 keys skipped, 1018055 bytes written.
+236602:C 12 May 2026 18:26:16.115 * DB saved on disk
+236602:C 12 May 2026 18:26:16.116 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:26:16.189 * Background saving terminated with success
+233929:M 12 May 2026 18:31:17.042 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:31:17.043 * Background saving started by pid 236962
+236962:C 12 May 2026 18:31:17.057 * BGSAVE done, 41 keys saved, 0 keys skipped, 1172337 bytes written.
+236962:C 12 May 2026 18:31:17.073 * DB saved on disk
+236962:C 12 May 2026 18:31:17.074 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:31:17.144 * Background saving terminated with success
+233929:M 12 May 2026 18:36:18.025 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:36:18.025 * Background saving started by pid 237294
+237294:C 12 May 2026 18:36:18.039 * BGSAVE done, 39 keys saved, 0 keys skipped, 1310538 bytes written.
+237294:C 12 May 2026 18:36:18.062 * DB saved on disk
+237294:C 12 May 2026 18:36:18.063 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:36:18.126 * Background saving terminated with success
+233929:M 12 May 2026 18:41:19.001 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:41:19.001 * Background saving started by pid 237604
+237604:C 12 May 2026 18:41:19.019 * BGSAVE done, 42 keys saved, 0 keys skipped, 1464507 bytes written.
+237604:C 12 May 2026 18:41:19.038 * DB saved on disk
+237604:C 12 May 2026 18:41:19.039 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:41:19.102 * Background saving terminated with success
+233929:M 12 May 2026 18:46:20.067 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:46:20.068 * Background saving started by pid 237926
+237926:C 12 May 2026 18:46:20.087 * BGSAVE done, 34 keys saved, 0 keys skipped, 1630304 bytes written.
+237926:C 12 May 2026 18:46:20.130 * DB saved on disk
+237926:C 12 May 2026 18:46:20.131 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:46:20.169 * Background saving terminated with success
+233929:M 12 May 2026 18:51:21.077 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:51:21.077 * Background saving started by pid 238190
+238190:C 12 May 2026 18:51:21.097 * BGSAVE done, 24 keys saved, 0 keys skipped, 1797008 bytes written.
+238190:C 12 May 2026 18:51:21.117 * DB saved on disk
+238190:C 12 May 2026 18:51:21.118 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:51:21.178 * Background saving terminated with success
+233929:M 12 May 2026 18:56:22.045 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 18:56:22.046 * Background saving started by pid 238491
+238491:C 12 May 2026 18:56:22.067 * BGSAVE done, 21 keys saved, 0 keys skipped, 1967807 bytes written.
+238491:C 12 May 2026 18:56:22.090 * DB saved on disk
+238491:C 12 May 2026 18:56:22.091 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 18:56:22.146 * Background saving terminated with success
+233929:M 12 May 2026 19:01:23.038 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 19:01:23.039 * Background saving started by pid 238801
+238801:C 12 May 2026 19:01:23.063 * BGSAVE done, 21 keys saved, 0 keys skipped, 2128822 bytes written.
+238801:C 12 May 2026 19:01:23.088 * DB saved on disk
+238801:C 12 May 2026 19:01:23.089 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 19:01:23.140 * Background saving terminated with success
+233929:M 12 May 2026 19:06:24.052 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 19:06:24.053 * Background saving started by pid 239061
+239061:C 12 May 2026 19:06:24.077 * BGSAVE done, 21 keys saved, 0 keys skipped, 2286642 bytes written.
+239061:C 12 May 2026 19:06:24.102 * DB saved on disk
+239061:C 12 May 2026 19:06:24.103 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 19:06:24.154 * Background saving terminated with success
+233929:M 12 May 2026 19:11:25.082 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 19:11:25.082 * Background saving started by pid 239362
+239362:C 12 May 2026 19:11:25.107 * BGSAVE done, 21 keys saved, 0 keys skipped, 2451114 bytes written.
+239362:C 12 May 2026 19:11:25.134 * DB saved on disk
+239362:C 12 May 2026 19:11:25.135 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 19:11:25.183 * Background saving terminated with success
+233929:M 12 May 2026 19:16:26.023 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 19:16:26.024 * Background saving started by pid 239683
+239683:C 12 May 2026 19:16:26.050 * BGSAVE done, 21 keys saved, 0 keys skipped, 2618862 bytes written.
+239683:C 12 May 2026 19:16:26.079 * DB saved on disk
+239683:C 12 May 2026 19:16:26.081 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 19:16:26.125 * Background saving terminated with success
+233929:M 12 May 2026 19:21:27.075 * 100 changes in 300 seconds. Saving...
+233929:M 12 May 2026 19:21:27.076 * Background saving started by pid 239944
+239944:C 12 May 2026 19:21:27.104 * BGSAVE done, 1 keys saved, 0 keys skipped, 2759775 bytes written.
+239944:C 12 May 2026 19:21:27.133 * DB saved on disk
+239944:C 12 May 2026 19:21:27.134 * Fork CoW for RDB: current 0 MB, peak 0 MB, average 0 MB
+233929:M 12 May 2026 19:21:27.177 * Background saving terminated with success
+233929:signal-handler (1778676980) Received SIGTERM scheduling shutdown...
