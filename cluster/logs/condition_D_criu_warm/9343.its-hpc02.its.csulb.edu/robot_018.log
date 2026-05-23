@@ -1,0 +1,37 @@
+2026-05-22 14:13:11,282 - [robot_018] Started fresh (app_ckpt=/checkpoints/state.pt, warm=/checkpoints/warm/state.pt/50)
+2026-05-22 14:13:11,284 - [robot_018] Tasks: 0/2000 success_rate=0.000
+2026-05-22 14:17:12,436 - [robot_018] Tasks: 100/2000 success_rate=0.400
+2026-05-22 14:21:35,675 - [robot_018] Tasks: 200/2000 success_rate=0.400
+2026-05-22 14:24:52,641 - [robot_018] Tasks: 300/2000 success_rate=0.600
+2026-05-22 14:26:18,721 - [robot_018] App-checkpoint saved (73.1ms, 17.17MB)
+2026-05-22 14:26:18,724 - [robot_018] migration requested at task 380, sleeping until runner kills me
+2026-05-22 14:31:02,453 - [robot_018] Restored from /checkpoints/state.pt (28.2ms, 17.17MB) → resuming at task 381
+2026-05-22 14:31:03,420 - [robot_018] Tasks: 400/2000 success_rate=0.500
+2026-05-22 14:31:08,667 - [robot_018] Tasks: 500/2000 success_rate=0.200
+2026-05-22 14:31:13,670 - [robot_018] App-checkpoint saved (45.2ms, 17.18MB)
+2026-05-22 14:31:13,670 - [robot_018] migration requested at task 580, sleeping until runner kills me
+2026-05-22 14:41:22,967 - [robot_018] Restored from /checkpoints/state.pt (769.6ms, 17.18MB) → resuming at task 581
+2026-05-22 14:42:40,459 - [robot_018] Tasks: 600/2000 success_rate=0.400
+2026-05-22 14:58:56,877 - [robot_018] Tasks: 700/2000 success_rate=0.300
+2026-05-22 15:09:17,949 - [robot_018] App-checkpoint saved (318.7ms, 17.18MB)
+2026-05-22 15:09:17,952 - [robot_018] migration requested at task 780, sleeping until runner kills me
+2026-05-22 15:19:27,731 - [robot_018] Restored from /checkpoints/state.pt (29.0ms, 17.18MB) → resuming at task 781
+2026-05-22 15:19:28,458 - [robot_018] Tasks: 800/2000 success_rate=0.500
+2026-05-22 15:19:34,388 - [robot_018] Tasks: 900/2000 success_rate=0.400
+2026-05-22 15:19:42,031 - [robot_018] App-checkpoint saved (49.9ms, 17.18MB)
+2026-05-22 15:19:42,032 - [robot_018] migration requested at task 980, sleeping until runner kills me
+2026-05-22 15:24:51,422 - [robot_018] Restored from /checkpoints/state.pt (155.9ms, 17.18MB) → resuming at task 981
+2026-05-22 15:25:13,746 - [robot_018] Tasks: 1000/2000 success_rate=0.900
+2026-05-22 15:27:02,555 - [robot_018] Tasks: 1100/2000 success_rate=0.500
+2026-05-22 15:27:49,055 - [robot_018] App-checkpoint saved (83.5ms, 17.18MB)
+2026-05-22 15:27:49,055 - [robot_018] migration requested at task 1130, sleeping until runner kills me
+2026-05-22 15:31:07,380 - [robot_018] Restored from /checkpoints/state.pt (174.8ms, 17.18MB) → resuming at task 1131
+2026-05-22 15:32:08,394 - [robot_018] Tasks: 1200/2000 success_rate=0.500
+2026-05-22 15:33:17,655 - [robot_018] Tasks: 1300/2000 success_rate=0.300
+2026-05-22 15:34:41,602 - [robot_018] Tasks: 1400/2000 success_rate=0.400
+2026-05-22 15:35:39,747 - [robot_018] Tasks: 1500/2000 success_rate=0.300
+2026-05-22 15:36:49,637 - [robot_018] Tasks: 1600/2000 success_rate=0.500
+2026-05-22 15:37:22,602 - [robot_018] Tasks: 1700/2000 success_rate=0.200
+2026-05-22 15:37:44,727 - [robot_018] Tasks: 1800/2000 success_rate=0.700
+2026-05-22 15:37:53,382 - [robot_018] Tasks: 1900/2000 success_rate=0.400
+2026-05-22 15:38:00,113 - [robot_018] Complete.

@@ -1,0 +1,33 @@
+2026-05-22 14:13:11,856 - [robot_000] Started fresh (app_ckpt=/checkpoints/state.pt, warm=/checkpoints/warm/state.pt/50)
+2026-05-22 14:13:11,857 - [robot_000] Tasks: 0/2000 success_rate=0.000
+2026-05-22 14:15:46,436 - [robot_000] Tasks: 100/2000 success_rate=0.100
+2026-05-22 14:18:20,899 - [robot_000] App-checkpoint saved (25.6ms, 17.17MB)
+2026-05-22 14:18:20,899 - [robot_000] migration requested at task 200, sleeping until runner kills me
+2026-05-22 14:20:29,048 - [robot_000] Restored from /checkpoints/state.pt (441.7ms, 17.17MB) → resuming at task 201
+2026-05-22 14:23:09,539 - [robot_000] Tasks: 300/2000 success_rate=0.500
+2026-05-22 14:26:16,221 - [robot_000] App-checkpoint saved (161.5ms, 17.18MB)
+2026-05-22 14:26:16,222 - [robot_000] migration requested at task 400, sleeping until runner kills me
+2026-05-22 14:31:18,393 - [robot_000] Restored from /checkpoints/state.pt (30.0ms, 17.18MB) → resuming at task 401
+2026-05-22 14:31:23,682 - [robot_000] Tasks: 500/2000 success_rate=0.600
+2026-05-22 14:31:29,944 - [robot_000] App-checkpoint saved (47.8ms, 17.18MB)
+2026-05-22 14:31:29,945 - [robot_000] migration requested at task 600, sleeping until runner kills me
+2026-05-22 14:42:37,815 - [robot_000] Restored from /checkpoints/state.pt (824.1ms, 17.18MB) → resuming at task 601
+2026-05-22 14:54:46,538 - [robot_000] Tasks: 700/2000 success_rate=0.700
+2026-05-22 15:06:33,906 - [robot_000] App-checkpoint saved (456.9ms, 17.18MB)
+2026-05-22 15:06:33,907 - [robot_000] migration requested at task 800, sleeping until runner kills me
+2026-05-22 15:14:15,515 - [robot_000] Restored from /checkpoints/state.pt (16.0ms, 17.18MB) → resuming at task 801
+2026-05-22 15:14:20,585 - [robot_000] Tasks: 900/2000 success_rate=0.400
+2026-05-22 15:14:23,178 - [robot_000] App-checkpoint saved (56.2ms, 17.18MB)
+2026-05-22 15:14:23,178 - [robot_000] migration requested at task 950, sleeping until runner kills me
+2026-05-22 15:20:34,366 - [robot_000] Restored from /checkpoints/state.pt (548.5ms, 17.18MB) → resuming at task 951
+2026-05-22 15:21:52,582 - [robot_000] Tasks: 1000/2000 success_rate=0.500
+2026-05-22 15:23:00,108 - [robot_000] Tasks: 1100/2000 success_rate=0.400
+2026-05-22 15:24:10,588 - [robot_000] Tasks: 1200/2000 success_rate=0.600
+2026-05-22 15:25:13,132 - [robot_000] Tasks: 1300/2000 success_rate=0.400
+2026-05-22 15:26:46,845 - [robot_000] Tasks: 1400/2000 success_rate=0.500
+2026-05-22 15:28:36,045 - [robot_000] Tasks: 1500/2000 success_rate=0.600
+2026-05-22 15:30:10,879 - [robot_000] Tasks: 1600/2000 success_rate=0.300
+2026-05-22 15:31:53,410 - [robot_000] Tasks: 1700/2000 success_rate=0.600
+2026-05-22 15:33:34,245 - [robot_000] Tasks: 1800/2000 success_rate=0.500
+2026-05-22 15:35:05,727 - [robot_000] Tasks: 1900/2000 success_rate=0.100
+2026-05-22 15:37:13,389 - [robot_000] Complete.
