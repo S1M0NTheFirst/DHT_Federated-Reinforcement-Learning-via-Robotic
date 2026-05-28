@@ -1,2 +1,5 @@
 HPC User.pdf
 run_fldht.sh
+
+# Pre-trained starting policy — regenerate with cluster/common/pretrain_ppo.py
+cluster/common/pretrained_policy.pt
