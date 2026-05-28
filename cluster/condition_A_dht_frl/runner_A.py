@@ -265,12 +265,23 @@ def main() -> int:
     # host env propagates to FOO=bar inside the container. (SINGULARITYENV_*
     # included for compat with older singularity-based installs.)
     pylibs_host = os.path.join(cfg.img_dir, "pylibs")
+    cluster_root = os.environ.get("CLUSTER_ROOT") or \
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Shared pretrained policy seeds the FedAvg global model so A starts from
+    # the same competent weights as the C/D/E baselines. Path is inside the
+    # container (cluster/ is bound at /cluster_app).
+    pretrained_container = "/cluster_app/common/pretrained_policy.pt"
+    # cfg.results_dir is a host path .../cluster/results/<folder>; inside the
+    # container cluster/ is bound at /cluster_app, so map by basename.
+    fl_result_container = f"/cluster_app/results/{os.path.basename(cfg.results_dir.rstrip('/'))}"
     flower_env = (
         f"APPTAINERENV_REDIS_HOST={cfg.redis_host} "
         f"APPTAINERENV_REDIS_PORT={cfg.redis_port} "
         f"APPTAINERENV_N_CLIENTS={cfg.num_clients} "
         f"APPTAINERENV_N_ROUNDS={cfg.total_fl_rounds} "
         f"APPTAINERENV_FLOWER_BIND=0.0.0.0:{cfg.flower_port} "
+        f"APPTAINERENV_WORKER_PRETRAINED_PATH={pretrained_container} "
+        f"APPTAINERENV_FL_RESULT_DIR={fl_result_container} "
         f"APPTAINERENV_PYTHONUNBUFFERED=1 "
         f"APPTAINERENV_PYTHONPATH=/pylibs:/app "
         f"SINGULARITYENV_REDIS_HOST={cfg.redis_host} "
@@ -278,6 +289,7 @@ def main() -> int:
         f"SINGULARITYENV_N_CLIENTS={cfg.num_clients} "
         f"SINGULARITYENV_N_ROUNDS={cfg.total_fl_rounds} "
         f"SINGULARITYENV_FLOWER_BIND=0.0.0.0:{cfg.flower_port} "
+        f"SINGULARITYENV_WORKER_PRETRAINED_PATH={pretrained_container} "
         f"SINGULARITYENV_PYTHONUNBUFFERED=1 "
         f"SINGULARITYENV_PYTHONPATH=/pylibs:/app "
     )
@@ -289,14 +301,17 @@ def main() -> int:
     # conda env) is not on PATH on remote nodes. Source conda first.
     conda_base = os.environ.get("CONDA_BASE", "/home/029822154/miniconda3")
     conda_env = os.environ.get("CONDA_ENV", "swiftbot")
+    # Run the CLUSTER copy of the Flower server (seeds pretrained init params).
+    # It is bound in at /cluster_app; swiftbot_rl/ stays frozen at /app.
     flower_remote = (
         f"cd {shlex.quote(cfg.swiftbot_root + '/dht_frl')}; "
         f"source {shlex.quote(conda_base)}/bin/activate {shlex.quote(conda_env)} && "
         f"exec env {flower_env} apptainer exec "
         f"--bind {shlex.quote(cfg.swiftbot_root)}:/app "
+        f"--bind {shlex.quote(cluster_root)}:/cluster_app "
         f"--bind {shlex.quote(pylibs_host)}:/pylibs "
         f"{shlex.quote(cfg.img_dir + '/' + IMAGE)} "
-        f"python3 /app/dht_frl/flower_server.py"
+        f"python3 /cluster_app/condition_A_dht_frl/flower_server.py"
     )
     flower_log = open(f"{cfg.run_log_dir}/flower_server.log", "ab", buffering=0)
     if is_local_node(cfg.server_node):
