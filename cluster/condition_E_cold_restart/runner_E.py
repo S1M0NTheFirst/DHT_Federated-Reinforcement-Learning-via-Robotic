@@ -11,6 +11,7 @@ import logging, os, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from common.cluster_runner import (
     ClusterConfig, apptainer_instance_name, kill_robot, launch_robot,
+    post_migration_recovery,
 )
 from common.baseline_runner_base import current_node, update_node, run_baseline
 
@@ -21,7 +22,13 @@ LOG = logging.getLogger("condE")
 
 CONDITION = "cold_restart"
 IMAGE     = "baseline.sif"
-WORKER    = "cold_restart/worker_random_client.py"
+# Use the SAME PPO worker as C/D so payload/learning are comparable. Cold
+# restart simply never sets APP_RESTORE_FROM, so on relaunch the worker reloads
+# the PRETRAINED policy (not the trained checkpoint) — i.e. it keeps its task
+# position via resume_counter but loses everything learned since the run began.
+# That is exactly the "floor" this condition is meant to represent.
+WORKER    = "/cluster_app/workers/worker_app_checkpoint.py"
+PRETRAINED_INSIDE = "/cluster_app/common/pretrained_policy.pt"
 
 
 def trigger_cold_restart(cfg, r, robot_id, success_rate_pre, task_counter_pre):
@@ -41,13 +48,23 @@ def trigger_cold_restart(cfg, r, robot_id, success_rate_pre, task_counter_pre):
     t_kill = time.perf_counter()
     time.sleep(2)
 
-    launch_robot(cfg, dst, cid, IMAGE, WORKER)
+    # Relaunch fresh — NO APP_RESTORE_FROM, so the worker reloads the pretrained
+    # policy and resumes at resume_counter. State learned during the run is lost.
+    launch_robot(cfg, dst, cid, IMAGE, WORKER,
+                 extra_env={"WORKER_PRETRAINED_PATH": PRETRAINED_INSIDE})
     update_node(robot_id, dst)
     t_launch = time.perf_counter()
 
     r.set(f"migration_done:{robot_id}", "1", ex=600)
 
     total_ms = (t_launch - t0) * 1000
+
+    recov = post_migration_recovery(r, robot_id, task_counter_pre, success_rate_pre)
+    success_rate_post = recov["success_rate_post"]
+    regression = 0.0
+    if success_rate_pre > 0:
+        regression = (success_rate_pre - success_rate_post) / success_rate_pre * 100
+
     return {
         "robot_id": robot_id, "src_node": src, "dst_node": dst,
         "trigger_to_dump_ms":     0,
@@ -57,12 +74,14 @@ def trigger_cold_restart(cfg, r, robot_id, success_rate_pre, task_counter_pre):
         "downtime_ms": total_ms,
         "total_MTT_ms": total_ms,
         "success_rate_pre": success_rate_pre,
-        "success_rate_post": 0,
-        "regression_pct": 0,
+        "success_rate_post": success_rate_post,
+        "regression_pct": round(regression, 2),
         "replay_buffer_entries_restored": 0,
         "network_bytes_transferred": 0,
         "checkpoint_size_mb": 0,
         "criu_mode": "cold_restart",
+        "throughput_post_60s":   recov["throughput_post_60s"],
+        "recovery_tasks_to_pre": recov["recovery_tasks_to_pre"],
     }
 
 
@@ -70,4 +89,5 @@ if __name__ == "__main__":
     sys.exit(run_baseline(
         condition=CONDITION, image=IMAGE,
         worker_script=WORKER, trigger_fn=trigger_cold_restart,
+        initial_extra_env={"WORKER_PRETRAINED_PATH": PRETRAINED_INSIDE},
     ))

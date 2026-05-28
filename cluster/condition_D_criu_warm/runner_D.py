@@ -30,6 +30,7 @@ from common.cluster_runner import (        # noqa: E402
     apptainer_instance_name,
     launch_robot, kill_robot,
     rsync_dir, ssh_run,
+    post_migration_recovery,
 )
 from common.baseline_runner_base import (  # noqa: E402
     current_node, update_node, run_baseline,
@@ -173,6 +174,13 @@ def trigger_app_warm(cfg, r, robot_id, success_rate_pre, task_counter_pre):
         precopy_bytes = _precopy_bytes.get(robot_id, 0)
 
     total_ms = (t_restore_done - t0) * 1000
+
+    recov = post_migration_recovery(r, robot_id, task_counter_pre, success_rate_pre)
+    success_rate_post = recov["success_rate_post"]
+    regression = 0.0
+    if success_rate_pre > 0:
+        regression = (success_rate_pre - success_rate_post) / success_rate_pre * 100
+
     return {
         "robot_id": robot_id, "src_node": src, "dst_node": dst,
         "trigger_to_dump_ms":     save_ms,
@@ -184,18 +192,20 @@ def trigger_app_warm(cfg, r, robot_id, success_rate_pre, task_counter_pre):
         "downtime_ms":            (t_restore_done - t_dump_start) * 1000,
         "total_MTT_ms":           total_ms,
         "success_rate_pre":       success_rate_pre,
-        "success_rate_post":      0,
-        "regression_pct":         0,
+        "success_rate_post":      success_rate_post,
+        "regression_pct":         round(regression, 2),
         "replay_buffer_entries_restored": rb_entries,
-        # network_bytes_transferred is the migration-window bytes only.
-        # Pre-copy bytes (paid during normal operation) accumulate in
-        # _precopy_bytes; we surface them via the unused-by-C field
-        # `gpu_util_during_migration` would be a poor home for it. Keep this
-        # column to migration-window for fair comparison with C; report
-        # cumulative pre-copy in the runner log instead.
+        # network_bytes_transferred is the migration-window bytes ONLY (delta
+        # rsync), so it's directly comparable with C. The continuous pre-copy
+        # cost — D's whole trade-off — is reported separately as
+        # background_bandwidth_mb (cumulative bytes the pre-copy thread shipped
+        # for this robot up to this migration).
         "network_bytes_transferred": migration_bytes,
+        "background_bandwidth_mb":   round(precopy_bytes / (1024 * 1024), 4),
         "checkpoint_size_mb":     chk_size_mb,
         "criu_mode":              "app_warm",
+        "throughput_post_60s":    recov["throughput_post_60s"],
+        "recovery_tasks_to_pre":  recov["recovery_tasks_to_pre"],
     }
 
 
@@ -209,6 +219,7 @@ if __name__ == "__main__":
             "APP_CHECKPOINT_PATH":      CKPT_INSIDE,
             "WARM_CHECKPOINT_PATH":     WARM_CKPT_INSIDE,
             "WARM_CHECKPOINT_INTERVAL": WARM_INTERVAL,
+            "WORKER_PRETRAINED_PATH":   "/cluster_app/common/pretrained_policy.pt",
         },
         pre_loop=_start_precopy,
     )

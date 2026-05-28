@@ -55,6 +55,7 @@ def run_baseline(
     trigger_fn: Callable,
     initial_extra_env: Optional[dict] = None,
     pre_loop: Optional[Callable[[ClusterConfig, Any], None]] = None,
+    concurrency: int = 1,
 ) -> int:
     # Install SIGTERM/SIGINT handlers + atexit hook BEFORE we start any
     # SSH/apptainer Popens, so a fast-arriving signal still cleans them up.
@@ -103,11 +104,13 @@ def run_baseline(
     if pre_loop is not None:
         pre_loop(cfg, r)
 
-    threading.Thread(
-        target=_migration_loop,
-        args=(cfg, r, writer, trigger_fn, image, worker_script),
-        daemon=True,
-    ).start()
+    loop_fn = _migration_loop if concurrency <= 1 else _migration_loop_concurrent
+    loop_args = (cfg, r, writer, trigger_fn, image, worker_script)
+    if concurrency > 1:
+        LOG.info("[Monitor] CONCURRENT mode: up to %d migrations per wave",
+                 concurrency)
+        loop_args = loop_args + (concurrency,)
+    threading.Thread(target=loop_fn, args=loop_args, daemon=True).start()
     threading.Thread(
         target=live_status_loop,
         args=(cfg, r, writer, 15),
@@ -189,6 +192,7 @@ def _migration_loop(cfg: ClusterConfig, r: redis.Redis,
                         float(info.get("success_rate", 0)),
                         int(info.get("task_counter", 0)),
                     )
+                    metrics["concurrency_level"] = 1
                     writer.write_event(metrics)
                 except Exception as e:
                     # trigger_fn failed mid-migration (typically SSH timeout
@@ -206,6 +210,76 @@ def _migration_loop(cfg: ClusterConfig, r: redis.Redis,
                 # task-200 / task-260 / task-400 migration waves without this.
                 # 6s leaves ~10 migrations/minute peak which is comfortable.
                 time.sleep(6)
+        except Exception as e:
+            LOG.error("[Monitor] %r", e)
+        time.sleep(1)
+
+
+def _dispatch_one(cfg, r, writer, trigger_fn, image, worker_script,
+                  info: dict, concurrency_level: int) -> None:
+    """Run one migration and write its event row, tagging concurrency_level.
+    Used by the concurrent monitor; mirrors the serial loop's error recovery."""
+    robot_id = info["robot_id"]
+    try:
+        metrics = trigger_fn(
+            cfg, r, robot_id,
+            float(info.get("success_rate", 0)),
+            int(info.get("task_counter", 0)),
+        )
+        metrics["concurrency_level"] = concurrency_level
+        writer.write_event(metrics)
+    except Exception as e:
+        LOG.error("[Monitor] trigger_fn failed for %s: %r\n%s",
+                  robot_id, e, traceback.format_exc())
+        _recover_stranded_robot(cfg, r, robot_id, image, worker_script)
+
+
+def _migration_loop_concurrent(cfg: ClusterConfig, r: redis.Redis,
+                               writer: MigrationMetricsWriter,
+                               trigger_fn: Callable,
+                               image: str, worker_script: str,
+                               concurrency: int) -> None:
+    """Concurrency experiment (Condition F). Instead of draining migration
+    requests one at a time with a throttle, collect all pending requests and
+    fire up to `concurrency` of them SIMULTANEOUSLY, measuring each one's
+    downtime under that contention. This is where DHT bundle transfer should
+    stay flat while checkpoint+rsync mechanisms serialize on disk/network.
+
+    Pair this with MIGRATION_OFFSET=0 in the worker so robots migrate in
+    synchronized waves large enough to fill a batch of size `concurrency`."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    LOG.info("[Monitor] concurrent watcher (batch size %d)", concurrency)
+    while True:
+        try:
+            # Snapshot + claim all currently-pending requests atomically enough:
+            # read the keys, then delete each as we read it so a key is owned by
+            # exactly one batch.
+            pending = []
+            for key in r.keys("migration_request:robot_*"):
+                raw = r.get(key)
+                if not raw:
+                    continue
+                r.delete(key)
+                try:
+                    pending.append(json.loads(raw))
+                except Exception:
+                    continue
+
+            # Process the claimed requests in batches of `concurrency`, running
+            # each batch in parallel and waiting for it to finish before the
+            # next (so concurrency_level reflects the real simultaneous load).
+            for i in range(0, len(pending), concurrency):
+                batch = pending[i:i + concurrency]
+                level = len(batch)
+                LOG.info("[Monitor] dispatching wave of %d concurrent migrations",
+                         level)
+                with ThreadPoolExecutor(max_workers=level) as pool:
+                    for info in batch:
+                        pool.submit(_dispatch_one, cfg, r, writer, trigger_fn,
+                                    image, worker_script, info, level)
+                # Small gap between waves so SSH masters settle.
+                time.sleep(2)
         except Exception as e:
             LOG.error("[Monitor] %r", e)
         time.sleep(1)

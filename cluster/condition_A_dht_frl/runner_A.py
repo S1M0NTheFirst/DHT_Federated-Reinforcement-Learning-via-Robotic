@@ -35,7 +35,7 @@ from common.cluster_runner import (
     is_local_node,
     launch_robot, kill_robot,
     establish_ssh_master, close_ssh_master, close_all_ssh_masters_fast,
-    live_status_loop, post_migration_success_rate,
+    live_status_loop, post_migration_recovery,
     rsync_dir, ssh_run, _SSH_OPTS,
 )
 
@@ -174,7 +174,8 @@ def trigger_dht_migration(cfg: ClusterConfig, r: redis.Redis,
     # NOTE: src_node/dst_node here represent the MIGRATION direction in this
     # event, not a permanent home reassignment, since the worker process is
     # not relocated (see comment above). The bundle is now resident on both.
-    success_rate_post = post_migration_success_rate(r, robot_id, task_counter_pre)
+    recov = post_migration_recovery(r, robot_id, task_counter_pre, success_rate_pre)
+    success_rate_post = recov["success_rate_post"]
     regression = 0.0
     if success_rate_pre > 0:
         regression = (success_rate_pre - success_rate_post) / success_rate_pre * 100
@@ -197,6 +198,8 @@ def trigger_dht_migration(cfg: ClusterConfig, r: redis.Redis,
         "network_bytes_transferred": bytes_xfer,
         "checkpoint_size_mb": round(chk_size_mb, 2),
         "criu_mode": "dht_bundle",
+        "throughput_post_60s": recov["throughput_post_60s"],
+        "recovery_tasks_to_pre": recov["recovery_tasks_to_pre"],
     }
 
 

@@ -516,6 +516,19 @@ class MigrationMetricsWriter:
         "network_bytes_transferred",
         "checkpoint_size_mb",
         "criu_mode",
+        # --- added for ATC revision ---
+        # Post-migration behavioral continuity (advisor request): how fast the
+        # robot returns to productive work after restore.
+        "throughput_post_60s",      # tasks completed in the 60s after resume
+        "recovery_tasks_to_pre",    # #tasks until rolling-10 sr >= pre (-1 if not recovered)
+        # Condition D pre-copy cost: continuous background bandwidth consumed.
+        "background_bandwidth_mb",
+        # Condition F (concurrent migration) — #migrations fired in this wave.
+        "concurrency_level",
+        # Condition G (failure injection).
+        "fault_injected",           # 1 if destination was killed mid-migration
+        "retry_count",              # #relaunch attempts before success
+        "total_recovery_ms",        # trigger -> productive again, incl. retries
     ]
 
     def __init__(self, condition: str, results_dir: str) -> None:
@@ -567,6 +580,72 @@ def post_migration_success_rate(r, robot_id: str, baseline_count: int,
     if not new_tasks:
         return 0.0
     return sum(1 for t in new_tasks[:n] if t.get("status") == "success") / min(n, len(new_tasks))
+
+
+def post_migration_recovery(r, robot_id: str, baseline_count: int,
+                            success_rate_pre: float, *,
+                            n_sr: int = 10, window_s: float = 60.0,
+                            max_tasks: int = 80, timeout_s: float = 120.0) -> dict:
+    """Single-pass post-migration probe. Returns behavioral-continuity metrics
+    in one polling loop (no extra blocking beyond the success-rate probe it
+    replaces):
+
+      success_rate_post     — success fraction of the first n_sr post-migration tasks
+      throughput_post_60s   — tasks observed within 60s of the first post-migration task
+      recovery_tasks_to_pre — #post-migration tasks until rolling-10 success rate
+                              recovers to >= success_rate_pre (-1 if not within window)
+
+    Reads task_logs from Redis (same source as post_migration_success_rate),
+    timestamping each new task on arrival. Stops once `window_s` has elapsed
+    since the first post-migration task or `max_tasks` have been seen."""
+    deadline = time.time() + timeout_s
+    seen = set()
+    new_tasks = []           # (arrival_wall, task_dict)
+    first_arrival = None
+    while time.time() < deadline:
+        for raw in r.lrange("task_logs", 0, 1500):
+            try:
+                e = json.loads(raw)
+            except Exception:
+                continue
+            if e.get("robot_id") != robot_id:
+                continue
+            tc = e.get("task_counter", 0)
+            if tc > baseline_count and tc not in seen:
+                seen.add(tc)
+                arr = time.time()
+                if first_arrival is None:
+                    first_arrival = arr
+                new_tasks.append((arr, e))
+        if first_arrival is not None:
+            elapsed = time.time() - first_arrival
+            if elapsed >= window_s or len(new_tasks) >= max_tasks:
+                break
+        time.sleep(0.5)
+
+    if not new_tasks:
+        return {"success_rate_post": 0.0,
+                "throughput_post_60s": 0,
+                "recovery_tasks_to_pre": -1}
+
+    # Order by task_counter (Redis list is newest-first and may interleave).
+    new_tasks.sort(key=lambda x: x[1].get("task_counter", 0))
+
+    first_n = [e for _, e in new_tasks[:n_sr]]
+    sr_post = (sum(1 for e in first_n if e.get("status") == "success")
+               / max(len(first_n), 1))
+
+    tput_60 = sum(1 for arr, _ in new_tasks if arr - first_arrival <= 60.0)
+
+    recovery = -1
+    for i, (_, e) in enumerate(new_tasks, start=1):
+        if float(e.get("success_rate_rolling10", 0)) >= success_rate_pre:
+            recovery = i
+            break
+
+    return {"success_rate_post": round(sr_post, 4),
+            "throughput_post_60s": tput_60,
+            "recovery_tasks_to_pre": recovery}
 
 
 # --------------------------------------------------------------------------- #
