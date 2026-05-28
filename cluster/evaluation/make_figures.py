@@ -73,6 +73,17 @@ def load(cond_key):
         return list(csv.DictReader(f))
 
 
+def load_folder(folder_name):
+    """Load migration_events.csv from an arbitrary results subdir by name.
+    Returns [] if the folder or CSV doesn't exist yet (F/G runs may not have
+    been done) so figures degrade gracefully instead of crashing."""
+    path = RESULTS / folder_name / "migration_events.csv"
+    if not path.exists():
+        return []
+    with open(path) as f:
+        return list(csv.DictReader(f))
+
+
 DATA = {k: load(k) for k in ORDER}
 
 
@@ -391,6 +402,145 @@ def fig_cumulative_cost():
     save(fig, "fig8_cumulative_cost")
 
 
+# -----------------------------------------------------------------------------
+# Fig 9: Post-migration recovery — tasks needed to return to pre-migration
+# success rate. The behavioral-continuity metric (advisor request). Lower is
+# better; A should be near 0 (policy survives), C/D higher, E highest (cold
+# restart reverts to the pretrained policy and must relearn).
+# -----------------------------------------------------------------------------
+def fig_recovery_curve():
+    xs = np.arange(len(ORDER))
+    meds, present = [], []
+    for k in ORDER:
+        # -1 = "never recovered within the probe window"; treat as the window
+        # cap so the bar is visible and honestly tall.
+        v = [x for x in col(DATA[k], "recovery_tasks_to_pre")]
+        v = [(80 if x < 0 else x) for x in v]   # cap == max_tasks in the probe
+        if v:
+            meds.append(statistics.median(v)); present.append(k)
+        else:
+            meds.append(0)
+    if not present:
+        print("  skip fig9_recovery_curve (no recovery_tasks_to_pre data yet)")
+        return
+    fig, ax = plt.subplots(figsize=(W1, 2.4))
+    bars = ax.bar(xs, meds,
+                  color=[COLORS[k] for k in ORDER],
+                  edgecolor="black", linewidth=0.5,
+                  hatch=[HATCH[k] for k in ORDER])
+    ax.set_xticks(xs); ax.set_xticklabels([LABELS[k] for k in ORDER])
+    ax.set_ylabel("Tasks to recover pre-migration\nsuccess rate (median)")
+    for i, b in enumerate(bars):
+        ax.text(b.get_x() + b.get_width()/2, meds[i] + 0.5,
+                f"{meds[i]:.0f}", ha="center", va="bottom", fontsize=7)
+    ax.set_title("Post-migration recovery (lower = better)")
+    save(fig, "fig9_recovery_curve")
+
+
+# -----------------------------------------------------------------------------
+# Fig 10: Concurrency scaling — median migration downtime vs number of
+# simultaneous migrations, for each mechanism (Condition F result dirs:
+# concurrent_{cold,warm}_c{N}). DHT (Condition A run with MIGRATION_CONCURRENCY)
+# folders named concurrent_dht_c{N} are picked up too if present. Flat = good.
+# -----------------------------------------------------------------------------
+def fig_concurrency_scaling():
+    import re
+    mech_series = {}   # mechanism -> {level: median_downtime_s}
+    for p in sorted(RESULTS.glob("concurrent_*_c*")):
+        m = re.match(r"concurrent_(\w+)_c(\d+)$", p.name)
+        if not m:
+            continue
+        mech, level = m.group(1), int(m.group(2))
+        rows = load_folder(p.name)
+        v = [float(r["total_MTT_ms"]) / 1000 for r in rows
+             if r.get("total_MTT_ms")]
+        if v:
+            mech_series.setdefault(mech, {})[level] = statistics.median(v)
+    if not mech_series:
+        print("  skip fig10_concurrency_scaling (no Condition F data yet)")
+        return
+    fig, ax = plt.subplots(figsize=(W1, 2.6))
+    style = {"dht": ("#1f3a93", "o"), "cold": ("#a04000", "s"),
+             "warm": ("#d68910", "^")}
+    for mech, series in sorted(mech_series.items()):
+        levels = sorted(series)
+        color, marker = style.get(mech, ("#444444", "d"))
+        ax.plot(levels, [series[l] for l in levels],
+                marker=marker, markersize=4, color=color,
+                linewidth=1.4 if mech == "dht" else 1.0,
+                label=mech.upper())
+    ax.set_xlabel("Concurrent migrations")
+    ax.set_ylabel("Median migration downtime (s)")
+    ax.set_title("Downtime vs migration concurrency")
+    ax.legend(loc="upper left", frameon=True, framealpha=0.95)
+    save(fig, "fig10_concurrency_scaling")
+
+
+# -----------------------------------------------------------------------------
+# Fig 11: Failure recovery — fault-injected migration cost (Condition G,
+# failure_injection dir) vs the normal cold baseline (C). Shows the extra
+# downtime the checkpoint mechanism pays when a destination dies mid-migration.
+# -----------------------------------------------------------------------------
+def fig_failure_recovery():
+    g = load_folder("failure_injection")
+    if not g:
+        print("  skip fig11_failure_recovery (no Condition G data yet)")
+        return
+    # Normal cold baseline downtime vs faulted-event total recovery.
+    c_norm = [float(r["total_MTT_ms"]) / 1000 for r in DATA["C"]
+              if r.get("total_MTT_ms")]
+    g_recov = [float(r["total_recovery_ms"]) / 1000 for r in g
+               if r.get("total_recovery_ms") and float(r.get("fault_injected", 0)) == 1]
+    if not g_recov:
+        print("  skip fig11_failure_recovery (no faulted events recorded)")
+        return
+    labels = ["C: normal\nmigration", "G: fault +\nretry"]
+    vals   = [statistics.median(c_norm) if c_norm else 0,
+              statistics.median(g_recov)]
+    fig, ax = plt.subplots(figsize=(W1, 2.4))
+    bars = ax.bar([0, 1], vals, color=["#a04000", "#7a1f1f"],
+                  edgecolor="black", linewidth=0.5, hatch=["xx", "++"])
+    ax.set_xticks([0, 1]); ax.set_xticklabels(labels)
+    ax.set_ylabel("Median downtime / recovery (s)")
+    for i, b in enumerate(bars):
+        ax.text(b.get_x() + b.get_width()/2, vals[i] * 1.02,
+                f"{vals[i]:.1f}s", ha="center", va="bottom", fontsize=7)
+    ax.set_title("Cost of a destination failure mid-migration")
+    save(fig, "fig11_failure_recovery")
+
+
+# -----------------------------------------------------------------------------
+# Fig 12: Condition D bandwidth trade-off — migration-window bytes (delta
+# rsync) vs the continuous pre-copy bandwidth paid during normal operation.
+# Makes D's "spend background bandwidth to shrink the migration window" cost
+# explicit, and shows A pays neither.
+# -----------------------------------------------------------------------------
+def fig_d_bandwidth_tradeoff():
+    bg = col(DATA["D"], "background_bandwidth_mb")
+    if not bg or max(bg) == 0:
+        print("  skip fig12_d_bandwidth_tradeoff (no background_bandwidth_mb yet)")
+        return
+    mig_mb = [x / (1024 * 1024) for x in col(DATA["D"], "network_bytes_transferred")]
+    a_mig  = [x / (1024 * 1024) for x in col(DATA["A"], "network_bytes_transferred")]
+    fig, ax = plt.subplots(figsize=(W1, 2.6))
+    xs = [0, 1]
+    mig_window = [statistics.mean(a_mig) if a_mig else 0,
+                  statistics.mean(mig_mb) if mig_mb else 0]
+    background = [0, statistics.mean(bg)]
+    ax.bar(xs, mig_window, color="#888888", edgecolor="black",
+           linewidth=0.5, label="Migration-window bytes")
+    ax.bar(xs, background, bottom=mig_window, color="#d68910",
+           edgecolor="black", linewidth=0.5, hatch="\\\\",
+           label="Continuous pre-copy bytes")
+    ax.set_xticks(xs)
+    ax.set_xticklabels(["A. DHT+FRL", "D. App warm\ncheckpoint"])
+    ax.set_ylabel("Mean bandwidth per migration (MB)")
+    ax.set_yscale("log")
+    ax.legend(loc="upper left", frameon=True, framealpha=0.95)
+    ax.set_title("D's pre-copy bandwidth trade-off")
+    save(fig, "fig12_d_bandwidth_tradeoff")
+
+
 def _unused_old_pareto():
     # Pull A's reference values.
     A_mtt = statistics.median(col(DATA["A"], "total_MTT_ms"))
@@ -548,4 +698,9 @@ if __name__ == "__main__":
     fig_mtt_boxplot()
     fig_fleet_projection()
     fig_cumulative_cost()
+    # New ATC-revision figures (skip gracefully if the data isn't present yet).
+    fig_recovery_curve()
+    fig_concurrency_scaling()
+    fig_failure_recovery()
+    fig_d_bandwidth_tradeoff()
     print(f"\nAll figures written to: {OUTDIR}")
