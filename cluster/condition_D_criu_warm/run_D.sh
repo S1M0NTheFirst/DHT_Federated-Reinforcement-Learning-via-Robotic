@@ -2,7 +2,7 @@
 #MSUB -N SwiftBot_D_CriuWarm
 #MSUB -W group_list=hpc2-coe-users
 #MSUB -l walltime=06:00:00
-#MSUB -l nodes=n020.cluster.pssclabs.com:ppn=8+n027.cluster.pssclabs.com:ppn=8+n033.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n012.cluster.pssclabs.com:ppn=8+n013.cluster.pssclabs.com:ppn=8+n014.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 set -uo pipefail
@@ -11,6 +11,9 @@ CLUSTER_ROOT="${CLUSTER_ROOT:-$HOME/cluster}"
 HERE="$CLUSTER_ROOT/$CONDITION"
 source "$CLUSTER_ROOT/common/cluster_config.sh"
 source "$CLUSTER_ROOT/common/cluster_lib.sh"
+
+# Per-condition Redis port so A/C/D/E can run in parallel without colliding.
+export REDIS_PORT=6381
 
 setup_run_dirs "$CONDITION"
 cleanup_and_exit() {

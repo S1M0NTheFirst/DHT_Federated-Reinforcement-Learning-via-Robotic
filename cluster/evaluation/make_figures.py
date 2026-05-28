@@ -37,26 +37,25 @@ plt.rcParams.update({
 })
 
 # Grayscale-friendly palette + hatches so figures survive B&W printing.
-ORDER  = ["A", "B", "C", "D", "E"]
+# Condition B (Apptainer state) dropped — Apptainer has no real checkpoint
+# support; baseline was an approximation that introduced a validity question.
+ORDER  = ["A", "C", "D", "E"]
 LABELS = {
     "A": "A. DHT+FRL\n(proposed)",
-    "B": "B. Apptainer\nstate",
     "C": "C. App cold\ncheckpoint",
     "D": "D. App warm\ncheckpoint",
     "E": "E. Cold\nrestart",
 }
 COLORS = {
     "A": "#1f3a93",  # deep blue — our method
-    "B": "#7a7a7a",
     "C": "#a04000",
     "D": "#d68910",
     "E": "#117a65",
 }
-HATCH  = {"A": "", "B": "//", "C": "xx", "D": "\\\\", "E": ".."}
+HATCH  = {"A": "", "C": "xx", "D": "\\\\", "E": ".."}
 
 DIRS = {
     "A": "condition_A_dht_frl",
-    "B": "condition_B_apptainer_state",
     "C": "condition_C_criu_cold",
     "D": "condition_D_criu_warm",
     "E": "condition_E_cold_restart",
@@ -400,7 +399,7 @@ def _unused_old_pareto():
     )
     A_sr  = statistics.mean(col(DATA["A"], "success_rate_pre"))
 
-    baselines = ["B", "C", "D", "E"]
+    baselines = ["C", "D", "E"]
     metric_names  = ["Migration speed", "Bandwidth efficiency", "Learning quality"]
     metric_colors = ["#1f3a93", "#a04000", "#117a65"]
     metric_hatch  = ["", "//", "xx"]

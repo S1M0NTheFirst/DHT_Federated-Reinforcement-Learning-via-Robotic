@@ -2,7 +2,7 @@
 #MSUB -N SwiftBot_A_DHT_FRL
 #MSUB -W group_list=hpc2-coe-users
 #MSUB -l walltime=12:00:00
-#MSUB -l nodes=n016.cluster.pssclabs.com:ppn=8+n017.cluster.pssclabs.com:ppn=8+n018.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n001.cluster.pssclabs.com:ppn=8+n005.cluster.pssclabs.com:ppn=8+n006.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 # Condition A — DHT+FRL.
@@ -20,6 +20,9 @@ CLUSTER_ROOT="${CLUSTER_ROOT:-$HOME/cluster}"
 HERE="$CLUSTER_ROOT/$CONDITION"
 source "$CLUSTER_ROOT/common/cluster_config.sh"
 source "$CLUSTER_ROOT/common/cluster_lib.sh"
+
+# Per-condition Redis port so A/C/D/E can run in parallel without colliding.
+export REDIS_PORT=6379
 
 setup_run_dirs "$CONDITION"
 # Trap SIGTERM (sent by MOAB on walltime / canceljob), SIGINT (Ctrl-C), and

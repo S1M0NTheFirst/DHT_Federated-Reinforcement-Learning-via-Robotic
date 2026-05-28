@@ -2,7 +2,7 @@
 #MSUB -N SwiftBot_C_CriuCold
 #MSUB -W group_list=hpc2-coe-users
 #MSUB -l walltime=05:00:00
-#MSUB -l nodes=n020.cluster.pssclabs.com:ppn=8+n027.cluster.pssclabs.com:ppn=8+n033.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n008.cluster.pssclabs.com:ppn=8+n009.cluster.pssclabs.com:ppn=8+n010.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 set -uo pipefail
@@ -11,6 +11,9 @@ CLUSTER_ROOT="${CLUSTER_ROOT:-$HOME/cluster}"
 HERE="$CLUSTER_ROOT/$CONDITION"
 source "$CLUSTER_ROOT/common/cluster_config.sh"
 source "$CLUSTER_ROOT/common/cluster_lib.sh"
+
+# Per-condition Redis port so A/C/D/E can run in parallel without colliding.
+export REDIS_PORT=6380
 
 # Condition C uses application-level checkpointing (torch.save/load), not
 # kernel CRIU — see cluster/README.md "Known limitations". No criu probe

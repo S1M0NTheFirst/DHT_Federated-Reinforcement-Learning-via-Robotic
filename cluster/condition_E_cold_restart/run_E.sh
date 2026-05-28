@@ -6,7 +6,7 @@
 # "nodes=3:ppn=8" consolidates onto one host. n034 currently rejects SSH
 # from outside an active job (head→n034 fails), so we use n035 + n036
 # (RTX 3090) + n021 (Tesla P100) instead. Swap n021 for n022 if it queues.
-#MSUB -l nodes=n016.cluster.pssclabs.com:ppn=8+n017.cluster.pssclabs.com:ppn=8+n018.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n016.cluster.pssclabs.com:ppn=8+n020.cluster.pssclabs.com:ppn=8+n021.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 set -uo pipefail
@@ -18,6 +18,9 @@ CLUSTER_ROOT="${CLUSTER_ROOT:-$HOME/cluster}"
 HERE="$CLUSTER_ROOT/$CONDITION"
 source "$CLUSTER_ROOT/common/cluster_config.sh"
 source "$CLUSTER_ROOT/common/cluster_lib.sh"
+
+# Per-condition Redis port so A/C/D/E can run in parallel without colliding.
+export REDIS_PORT=6382
 
 setup_run_dirs "$CONDITION"
 cleanup_and_exit() {
