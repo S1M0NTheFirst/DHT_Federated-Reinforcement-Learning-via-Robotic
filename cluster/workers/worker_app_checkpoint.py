@@ -282,7 +282,7 @@ def main():
             except Exception as e:
                 logger.warning(f"[{robot_id}] warm snapshot failed: {e}")
 
-        if task_counter % 100 == 0:
+        if task_counter % 25 == 0:
             logger.info(f"[{robot_id}] Tasks: {task_counter}/{TOTAL_TASKS} "
                         f"success_rate={sr:.3f} step={agent.training_step}")
 

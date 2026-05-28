@@ -381,6 +381,10 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
     cluster_root = os.environ.get("CLUSTER_ROOT") or \
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     worker_path = worker_script if worker_script.startswith("/") else f"/app/{worker_script}"
+    # Per-worker math-library thread cap (see env_pairs below). Default 4 gives
+    # mild contention so success_rate sits below 1.0; override with
+    # WORKER_MATH_THREADS to calibrate difficulty without editing code.
+    _math_threads = os.environ.get("WORKER_MATH_THREADS", "4")
 
     env_pairs = {
         "REDIS_HOST":       cfg.redis_host,
@@ -392,6 +396,18 @@ def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
         "TOTAL_FL_ROUNDS":  cfg.total_fl_rounds,
         "PYTHONUNBUFFERED": 1,
         "PYTHONPATH":       "/pylibs:/app:/robot_lib",
+        # Cap math-library threads per worker. ROBOTS_PER_NODE (=10) workers
+        # share ppn (=8) cores; the default spawns 8 BLAS threads PER worker
+        # (~80 threads on 8 cores) -> thrash + node asymmetry. This knob also
+        # tunes task difficulty: too few threads -> tasks finish well under the
+        # deadline -> success_rate pegs at 1.0 (no regression headroom); more
+        # threads -> mild contention -> some tasks miss the deadline -> success
+        # sits below 1.0 with room to dip after migration. Calibrate per run
+        # with `msub -v WORKER_MATH_THREADS=N ...` without re-uploading code.
+        "OMP_NUM_THREADS":      _math_threads,
+        "OPENBLAS_NUM_THREADS": _math_threads,
+        "MKL_NUM_THREADS":      _math_threads,
+        "NUMEXPR_NUM_THREADS":  _math_threads,
     }
     if extra_env:
         env_pairs.update(extra_env)
@@ -584,20 +600,25 @@ def post_migration_success_rate(r, robot_id: str, baseline_count: int,
 
 def post_migration_recovery(r, robot_id: str, baseline_count: int,
                             success_rate_pre: float, *,
-                            n_sr: int = 10, window_s: float = 60.0,
-                            max_tasks: int = 80, timeout_s: float = 120.0) -> dict:
-    """Single-pass post-migration probe. Returns behavioral-continuity metrics
-    in one polling loop (no extra blocking beyond the success-rate probe it
-    replaces):
+                            n_sr: int = 10, max_wait_s: float = 30.0,
+                            timeout_s: float = 45.0) -> dict:
+    """Single-pass post-migration probe with EARLY EXIT so it doesn't block the
+    migration monitor for the full window. Returns:
 
       success_rate_post     — success fraction of the first n_sr post-migration tasks
-      throughput_post_60s   — tasks observed within 60s of the first post-migration task
+      throughput_post_60s   — tasks/min, extrapolated from the observed rate
+                              (rate over the window x 60), valid even on early exit
       recovery_tasks_to_pre — #post-migration tasks until rolling-10 success rate
-                              recovers to >= success_rate_pre (-1 if not within window)
+                              recovers to >= success_rate_pre (-1 if not recovered)
 
-    Reads task_logs from Redis (same source as post_migration_success_rate),
-    timestamping each new task on arrival. Stops once `window_s` has elapsed
-    since the first post-migration task or `max_tasks` have been seen."""
+    Exit conditions (whichever first):
+      - we have >= n_sr tasks AND recovery has been detected (the common case
+        for a preserved policy: a handful of tasks, ~seconds), or
+      - max_wait_s elapsed since the first post-migration task, or
+      - timeout_s elapsed overall (no tasks showed up at all).
+
+    Reads task_logs from Redis, timestamping each new task on arrival. This
+    replaces the old fixed-60s wait that serialized the monitor at ~60s/event."""
     deadline = time.time() + timeout_s
     seen = set()
     new_tasks = []           # (arrival_wall, task_dict)
@@ -617,25 +638,36 @@ def post_migration_recovery(r, robot_id: str, baseline_count: int,
                 if first_arrival is None:
                     first_arrival = arr
                 new_tasks.append((arr, e))
+
         if first_arrival is not None:
+            ordered = sorted(new_tasks, key=lambda x: x[1].get("task_counter", 0))
+            recovered = any(
+                float(e.get("success_rate_rolling10", 0)) >= success_rate_pre
+                for _, e in ordered
+            )
             elapsed = time.time() - first_arrival
-            if elapsed >= window_s or len(new_tasks) >= max_tasks:
+            # Early exit: enough for sr_post AND we've seen recovery. Or the
+            # per-event wait cap is hit (recovery genuinely slow — itself data).
+            if (len(ordered) >= n_sr and recovered) or elapsed >= max_wait_s:
                 break
-        time.sleep(0.5)
+        time.sleep(0.3)
 
     if not new_tasks:
         return {"success_rate_post": 0.0,
                 "throughput_post_60s": 0,
                 "recovery_tasks_to_pre": -1}
 
-    # Order by task_counter (Redis list is newest-first and may interleave).
     new_tasks.sort(key=lambda x: x[1].get("task_counter", 0))
 
     first_n = [e for _, e in new_tasks[:n_sr]]
     sr_post = (sum(1 for e in first_n if e.get("status") == "success")
                / max(len(first_n), 1))
 
-    tput_60 = sum(1 for arr, _ in new_tasks if arr - first_arrival <= 60.0)
+    # Throughput as a rate extrapolated to per-minute, so an early exit (a few
+    # tasks in a few seconds) still yields a meaningful number.
+    last_arrival = new_tasks[-1][0]
+    span = max(last_arrival - first_arrival, 1e-3)
+    tput_per_min = round(len(new_tasks) / span * 60.0, 1) if len(new_tasks) > 1 else 0
 
     recovery = -1
     for i, (_, e) in enumerate(new_tasks, start=1):
@@ -644,7 +676,7 @@ def post_migration_recovery(r, robot_id: str, baseline_count: int,
             break
 
     return {"success_rate_post": round(sr_post, 4),
-            "throughput_post_60s": tput_60,
+            "throughput_post_60s": tput_per_min,
             "recovery_tasks_to_pre": recovery}
 
 
