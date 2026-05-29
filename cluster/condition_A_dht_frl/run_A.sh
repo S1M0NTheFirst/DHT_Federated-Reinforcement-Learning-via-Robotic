@@ -2,7 +2,7 @@
 #MSUB -N SwiftBot_A_DHT_FRL
 #MSUB -W group_list=hpc2-coe-users
 #MSUB -l walltime=12:00:00
-#MSUB -l nodes=n001.cluster.pssclabs.com:ppn=8+n004.cluster.pssclabs.com:ppn=8+n005.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n001.cluster.pssclabs.com:ppn=8+n005.cluster.pssclabs.com:ppn=8+n027.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 # Condition A — DHT+FRL.

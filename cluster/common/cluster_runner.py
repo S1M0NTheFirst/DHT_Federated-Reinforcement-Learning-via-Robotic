@@ -136,12 +136,27 @@ def _ssh_opts_for_cid(cid: int) -> list[str]:
 
 
 def establish_ssh_master(node: str, cid: int) -> None:
-    """Open a persistent SSH master for `cid` on `node` before launching its
-    worker. Each robot gets its own master TCP so MaxSessions can't be hit."""
+    """Pre-open a persistent SSH master for `cid` on `node` before launching its
+    worker. Each robot gets its own master TCP so MaxSessions can't be hit.
+
+    FAIL-SOFT: some cluster nodes answer plain SSH but hang on control-master
+    mode (`ssh -M -f -N`) — observed on several HPC2 nodes. Pre-establishment
+    is only an optimization (it spreads out TCP setup to dodge sshd MaxStartups
+    bursts); it is NOT required for correctness. So a timeout/failure here is
+    logged and swallowed rather than crashing the whole run — ControlMaster=auto
+    will open a connection on demand when the worker actually launches."""
     if is_local_node(node):
         return
     cmd = ["ssh", *_ssh_opts_for_cid(cid), "-M", "-f", "-N", node]
-    subprocess.run(cmd, check=False, timeout=30)
+    try:
+        subprocess.run(cmd, check=False, timeout=10)
+    except subprocess.TimeoutExpired:
+        LOG.warning("[SSH] master pre-establish to %s (cid %d) timed out — "
+                    "continuing without it (ControlMaster=auto opens on demand)",
+                    node, cid)
+    except Exception as e:
+        LOG.warning("[SSH] master pre-establish to %s (cid %d) failed: %r — "
+                    "continuing", node, cid, e)
 
 
 def close_ssh_master(node: str, cid: int) -> None:

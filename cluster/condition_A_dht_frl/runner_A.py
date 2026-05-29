@@ -229,15 +229,28 @@ def migration_monitor(cfg: ClusterConfig, r: redis.Redis,
         time.sleep(1)
 
 
-def wait_for_completion(cfg: ClusterConfig, r: redis.Redis) -> None:
-    """Block until all robots write robot_done:robot_<cid> OR the wall-clock
-    deadline passes (the runner job's PBS walltime will SIGKILL us anyway)."""
-    LOG.info("[Wait] waiting for all %d robots to finish", cfg.num_clients)
+def wait_for_completion(cfg: ClusterConfig, r: redis.Redis,
+                        flower_proc=None) -> None:
+    """Block until the run is done. Unlike the C/D/E baseline worker, the FROZEN
+    DHT worker (swiftbot_rl/dht_frl/worker_robot_client.py) does NOT set
+    robot_done — it just finishes its Flower rounds and exits. So waiting on
+    robot_done alone hangs until walltime. The authoritative completion signal
+    for Condition A is the Flower server process exiting after its final round:
+    once FL is complete, all migrations have fired and the data is written.
+    We watch flower_proc and also keep the robot_done check as a fallback."""
+    LOG.info("[Wait] waiting for FL to complete (Flower server exit) "
+             "or all %d robots to finish", cfg.num_clients)
     while True:
         done = sum(1 for cid in range(cfg.num_clients)
                    if r.get(f"robot_done:robot_{cid:03d}"))
         if done >= cfg.num_clients:
             LOG.info("[Wait] all robots done.")
+            return
+        if flower_proc is not None and flower_proc.poll() is not None:
+            LOG.info("[Wait] Flower server exited (rc=%s) — FL complete, "
+                     "finishing run.", flower_proc.returncode)
+            # Brief grace so the migration monitor drains any last event.
+            time.sleep(10)
             return
         time.sleep(15)
 
@@ -360,7 +373,7 @@ def main() -> int:
                      daemon=True).start()
 
     try:
-        wait_for_completion(cfg, r)
+        wait_for_completion(cfg, r, flower_proc)
     except KeyboardInterrupt:
         LOG.info("Interrupted")
     finally:

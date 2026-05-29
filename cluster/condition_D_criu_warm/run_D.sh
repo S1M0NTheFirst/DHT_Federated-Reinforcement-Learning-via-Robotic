@@ -2,7 +2,7 @@
 #MSUB -N SwiftBot_D_CriuWarm
 #MSUB -W group_list=hpc2-coe-users
 #MSUB -l walltime=06:00:00
-#MSUB -l nodes=n016.cluster.pssclabs.com:ppn=8+n020.cluster.pssclabs.com:ppn=8+n021.cluster.pssclabs.com:ppn=8
+#MSUB -l nodes=n016.cluster.pssclabs.com:ppn=8+n021.cluster.pssclabs.com:ppn=8+n027.cluster.pssclabs.com:ppn=8
 #MSUB -j oe
 
 set -uo pipefail
