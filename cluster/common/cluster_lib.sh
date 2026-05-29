@@ -244,6 +244,17 @@ cleanup_all_nodes() {
         pkill -9 -u $USER -f flower_server.py 2>/dev/null || true
         pkill -9 -u $USER -x apptainer 2>/dev/null || true
         pkill -9 -u $USER -x redis-server 2>/dev/null || true
+        # Apptainer mounts the SIF via a squashfuse (FUSE) helper, and overlay
+        # via fuse-overlayfs. We launch with `apptainer exec`, so a SIGKILLed
+        # apptainer ORPHANS these helpers: the image stays mounted and pinned
+        # in RAM outside the scheduler (the n017 leak the admin flagged).
+        # Unmount each FUSE mount, then kill any helper that survives.
+        for mp in $(grep -E "squashfuse|fuse-overlayfs|fuse.squash" /proc/mounts 2>/dev/null | awk "{print \$2}"); do
+            fusermount -u "$mp" 2>/dev/null || fusermount -uz "$mp" 2>/dev/null || true
+        done
+        pkill -TERM -u $USER -f "squashfuse|fuse-overlayfs" 2>/dev/null || true
+        sleep 1
+        pkill -9 -u $USER -f "squashfuse|fuse-overlayfs" 2>/dev/null || true
         rm -rf /tmp/swiftbot_* 2>/dev/null || true
     '
     for n in "${nodes[@]}"; do
@@ -265,11 +276,11 @@ cleanup_all_nodes() {
         local leftover
         if [[ "$n" == "$self_fqdn" || "$n" == "$self_short" || \
               "$n" == "${self_short}."* ]]; then
-            leftover=$(pgrep -u "$USER" -af 'apptainer|worker_|redis-server' \
+            leftover=$(pgrep -u "$USER" -af 'apptainer|worker_|redis-server|squashfuse|fuse-overlayfs' \
                 2>/dev/null | head -5)
         else
             leftover=$(ssh -n -o ConnectTimeout=5 -o BatchMode=yes "$n" \
-                "pgrep -u \$USER -af 'apptainer|worker_|redis-server' 2>/dev/null | head -5" \
+                "pgrep -u \$USER -af 'apptainer|worker_|redis-server|squashfuse|fuse-overlayfs' 2>/dev/null | head -5" \
                 2>/dev/null)
         fi
         if [[ -n "$leftover" ]]; then
