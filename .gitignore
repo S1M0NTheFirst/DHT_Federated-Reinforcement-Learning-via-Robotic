@@ -7,3 +7,6 @@ cluster/common/pretrained_policy.pt
 # Run logs — copied back from the cluster, not source
 cluster/logs/
 cluster/_archive/old_design_logs/
+
+# Paper drafts — not tracked in this repo
+paper/
