@@ -118,7 +118,6 @@ def fig1():
     ax.set_ylim(0, 1.005)
     ax.set_xlabel("Migration time (s, log scale)")
     ax.set_ylabel("CDF")
-    ax.set_title("Migration-time distribution: DHT-FRL vs. baselines")
     ax.legend(loc="lower right", frameon=True, fancybox=False, edgecolor="0.4")
     save(fig, "fig1_mtt_cdf")
 
@@ -150,7 +149,6 @@ def fig2():
     ax.set_yticklabels([c[1] for c in CONDS])
     ax.invert_yaxis()
     ax.set_xlabel("Median time per phase (s)")
-    ax.set_title("Where migration time goes: per-phase breakdown")
     ax.legend(loc="lower right", ncol=2, frameon=True,
               fancybox=False, edgecolor="0.4")
     ax.grid(axis="x", linestyle=":", alpha=0.6)
@@ -223,7 +221,6 @@ def fig4():
     ax.set_xlabel("Migration-time budget (SLO)")
     ax.set_ylabel("Migrations meeting budget (%)")
     ax.set_ylim(0, 108)
-    ax.set_title("SLO compliance: % of migrations within budget")
     ax.legend(loc="lower right", ncol=2, frameon=True,
               fancybox=False, edgecolor="0.4")
     ax.grid(axis="y", linestyle=":", alpha=0.6)
