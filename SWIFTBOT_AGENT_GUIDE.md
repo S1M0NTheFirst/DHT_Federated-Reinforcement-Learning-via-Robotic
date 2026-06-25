@@ -62,3 +62,38 @@ Headline = per-migration **checkpoint size**:
 Takeaway: container-level checkpointing ships hundreds of MB–GBs (Python runtime,
 CUDA libs, full VRAM), while the semantically necessary state to resume on-policy
 updates is only ~160 KB — a >3000× reduction with near-zero success regression.
+
+## Motivation experiment — second job (TODO: run on Ubuntu)
+
+**Goal:** Advisor requested at least two different jobs to prove that CRIU
+checkpoint bloat is a general problem, not specific to our robot workload. We
+run a second job, measure CRIU cold size vs app-level size, and add both rows
+to the paper's motivation table.
+
+**Dataset: D4RL `hopper-medium-v2`**
+- What it is: pre-collected transitions for a MuJoCo hopper locomotion robot.
+  A SAC/TD3 agent trains offline on these transitions inside the container.
+- Download: `pip install d4rl` pulls the dataset automatically on first run
+  (~20 MB). Requires MuJoCo + `gymnasium[mujoco]` in the image.
+- Why this one: small, well-known offline RL benchmark, explicitly robotic
+  locomotion — fits the paper theme and reviewers will recognise it.
+
+**Conditions to run (only two needed):**
+
+| Condition | Command | What to record |
+|---|---|---|
+| `criu_cold` | `python swiftbot_rl/criu_cold/criu_cold_runner.py` | `checkpoint_size_mb` from results CSV |
+| App-level measure | `torch.save(policy.state_dict(), ...)` after a few training steps | file size on disk (KB) |
+
+Do **not** rerun criu_warm, docker_checkpoint, or cold_restart — the cold dump
+size alone is sufficient to make the motivation point.
+
+**Expected outcome to add to motivation table:**
+
+| Job | CRIU cold checkpoint | App checkpoint |
+|---|---|---|
+| Robot task bidder (current) | ~547 MB | ~160 KB |
+| D4RL hopper agent (new) | ~500–550 MB | ~2–5 MB |
+
+CRIU size stays roughly constant (container overhead dominates); app size scales
+only with the policy. That contrast is the motivation argument.
