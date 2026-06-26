@@ -96,11 +96,94 @@ def wait_ready(timeout: int = 900) -> dict:
     raise TimeoutError(f"agent did not write ready marker in {timeout}s")
 
 
+def _dir_size_mb(path: str) -> float:
+    total = sum(
+        os.path.getsize(os.path.join(r, f))
+        for r, _, files in os.walk(path) for f in files
+    )
+    return total / (1024 * 1024)
+
+
+def do_criu_cold(host_pid: int) -> tuple:
+    """Single stop-and-copy dump. Returns (size_mb, dump_ms, returncode)."""
+    if os.path.exists(CRIU_OUT_DIR):
+        shutil.rmtree(CRIU_OUT_DIR)
+    os.makedirs(CRIU_OUT_DIR, exist_ok=True)
+
+    if not cuda_checkpoint_toggle(host_pid):
+        print("[motivation] WARNING cuda-checkpoint suspend failed.", flush=True)
+
+    t0 = time.perf_counter()
+    res = real_criu_dump(host_pid, CRIU_OUT_DIR, parent_dir="",
+                         pre_dump=False, leave_running=True, timeout=180)
+    dump_ms = (time.perf_counter() - t0) * 1000
+
+    if not cuda_checkpoint_toggle(host_pid):
+        print("[motivation] WARNING cuda-checkpoint resume failed.", flush=True)
+
+    if res["returncode"] != 0:
+        print(f"[motivation] WARNING criu rc={res['returncode']}: "
+              f"{res['stderr'][:400]}", flush=True)
+
+    return res["size_mb"], dump_ms, res["returncode"]
+
+
+def do_criu_warm(host_pid: int, n_predumps: int = 3) -> tuple:
+    """N pre-dumps + final delta dump. Returns (total_size_mb, dump_ms, returncode).
+    Mirrors trigger_criu_warm_migration in criu_warm/criu_warm_runner.py.
+    Total size = sum of all pre-dump dirs + final dir (same as criu_warm CSV).
+    """
+    warm_root = CRIU_OUT_DIR + "_warm"
+    if os.path.exists(warm_root):
+        shutil.rmtree(warm_root)
+    os.makedirs(warm_root, exist_ok=True)
+
+    if not cuda_checkpoint_toggle(host_pid):
+        print("[motivation] WARNING cuda-checkpoint suspend failed.", flush=True)
+
+    parent = ""
+    for i in range(n_predumps):
+        predump_dir = os.path.join(warm_root, f"predump_{i}")
+        res = real_criu_dump(host_pid, predump_dir, parent_dir=parent,
+                             pre_dump=True, leave_running=True, timeout=60)
+        if res["returncode"] != 0:
+            print(f"[motivation] pre-dump {i} failed: {res['stderr'][:200]}",
+                  flush=True)
+            parent = ""
+            break
+        parent = predump_dir
+        print(f"[motivation] pre-dump {i} done "
+              f"({_dir_size_mb(predump_dir):.1f} MB)", flush=True)
+        time.sleep(0.05)
+
+    t0 = time.perf_counter()
+    final_dir = os.path.join(warm_root, "final")
+    res_final = real_criu_dump(host_pid, final_dir, parent_dir=parent,
+                               pre_dump=False, leave_running=True, timeout=180)
+    dump_ms = (time.perf_counter() - t0) * 1000
+
+    if not cuda_checkpoint_toggle(host_pid):
+        print("[motivation] WARNING cuda-checkpoint resume failed.", flush=True)
+
+    if res_final["returncode"] != 0:
+        print(f"[motivation] WARNING final dump rc={res_final['returncode']}: "
+              f"{res_final['stderr'][:400]}", flush=True)
+
+    total_mb = _dir_size_mb(warm_root)
+    print(f"[motivation] warm total size = {total_mb:.2f} MB "
+          f"(all pre-dump dirs + final)", flush=True)
+    return total_mb, dump_ms, res_final["returncode"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--job",   default="d4rl_hopper_medium_v2")
+    ap.add_argument("--warm",  action="store_true",
+                    help="Run CRIU warm (pre-copy) instead of cold dump")
+    ap.add_argument("--predumps", type=int, default=3,
+                    help="Number of pre-dump iterations for --warm (default 3)")
     args = ap.parse_args()
 
     if os.geteuid() != 0:
@@ -108,9 +191,6 @@ def main():
               "and criu dump will likely fail.", flush=True)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    if os.path.exists(CRIU_OUT_DIR):
-        shutil.rmtree(CRIU_OUT_DIR)
-    os.makedirs(CRIU_OUT_DIR, exist_ok=True)
 
     try:
         docker_run_container(args.steps, args.batch)
@@ -120,41 +200,28 @@ def main():
         print(f"[motivation] agent ready (container-pid={ready['pid']}); "
               f"policy state_dict = {policy_kb:.1f} KB", flush=True)
 
-        # Get the *host* PID — ready['pid'] is the in-container PID.
         host_pid = get_container_pid(CONTAINER_NAME)
         if host_pid <= 0:
             raise RuntimeError("could not resolve container host PID")
         print(f"[motivation] container host PID = {host_pid}", flush=True)
 
-        # Let RSS settle after torch.save spikes.
-        time.sleep(3.0)
+        time.sleep(3.0)  # let RSS settle after torch.save
 
-        # Mirror trigger_criu_cold_migration: suspend CUDA, dump, resume CUDA.
-        if not cuda_checkpoint_toggle(host_pid):
-            print("[motivation] WARNING cuda-checkpoint suspend failed — "
-                  "criu dump will likely fail with CUDA mapping errors.",
-                  flush=True)
-
-        t0 = time.perf_counter()
-        res = real_criu_dump(host_pid, CRIU_OUT_DIR, parent_dir="",
-                             pre_dump=False, leave_running=True, timeout=180)
-        dump_ms = (time.perf_counter() - t0) * 1000
-        criu_mb = res["size_mb"]
-        if res["returncode"] != 0:
-            print(f"[motivation] WARNING criu rc={res['returncode']}: "
-                  f"{res['stderr'][:400]}", flush=True)
-
-        if not cuda_checkpoint_toggle(host_pid):
-            print("[motivation] WARNING cuda-checkpoint resume failed.",
-                  flush=True)
+        if args.warm:
+            criu_mb, dump_ms, rc = do_criu_warm(host_pid, args.predumps)
+            criu_mode = "warm"
+        else:
+            criu_mb, dump_ms, rc = do_criu_cold(host_pid)
+            criu_mode = "cold"
 
         ratio = (criu_mb * 1024) / policy_kb if policy_kb else 0.0
         row = {
             "job":                   args.job,
-            "criu_cold_size_mb":     round(criu_mb, 2),
+            "criu_mode":             criu_mode,
+            "criu_size_mb":          round(criu_mb, 2),
             "app_policy_size_kb":    round(policy_kb, 2),
             "ratio_criu_over_app":   round(ratio, 1),
-            "criu_returncode":       res["returncode"],
+            "criu_returncode":       rc,
             "dump_ms":               round(dump_ms, 0),
             "container_host_pid":    host_pid,
             "steps":                 args.steps,
