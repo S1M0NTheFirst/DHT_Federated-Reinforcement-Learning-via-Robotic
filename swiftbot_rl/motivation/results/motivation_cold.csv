@@ -1,0 +1,2 @@
+job,criu_cold_size_mb,app_policy_size_kb,ratio_criu_over_app,criu_returncode,dump_ms,container_host_pid,steps,batch,timestamp
+d4rl_hopper_medium_v2,804.26,278.01,2962.4,0,1099.0,9775,500,256,2026-06-25T13:52:39
