@@ -99,7 +99,8 @@ def load_transitions(n_target: int = 50_000):
         return obs, act, rew, nxt, done
 
 
-def train(steps: int, batch: int, save_path: str, ready_path: str):
+def train(steps: int, batch: int, save_path: str, ready_path: str,
+          keep_training: bool = False):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"[hopper_agent] device={device}", flush=True)
 
@@ -118,7 +119,7 @@ def train(steps: int, batch: int, save_path: str, ready_path: str):
     opt_c   = torch.optim.Adam(
         list(critic1.parameters()) + list(critic2.parameters()), lr=3e-4)
 
-    for step in range(steps):
+    def _update():
         idx = torch.randint(0, N, (batch,))
         o, a, r, no, d = obs_t[idx], act_t[idx], rew_t[idx], nxt_t[idx], done_t[idx]
 
@@ -136,7 +137,10 @@ def train(steps: int, batch: int, save_path: str, ready_path: str):
         a_pi = mu + log_std.exp() * torch.randn_like(mu)
         loss_a = -critic1(o, a_pi).mean()
         opt_a.zero_grad(); loss_a.backward(); opt_a.step()
+        return loss_c, loss_a
 
+    for step in range(steps):
+        loss_c, loss_a = _update()
         if step % 100 == 0:
             print(f"[hopper_agent] step={step:5d} "
                   f"loss_c={loss_c.item():.3f} loss_a={loss_a.item():.3f}",
@@ -160,9 +164,25 @@ def train(steps: int, batch: int, save_path: str, ready_path: str):
     print(f"[hopper_agent] ready marker written -> {ready_path} "
           f"(pid={os.getpid()})", flush=True)
 
-    # Idle so CRIU can dump us.
+    if not keep_training:
+        # Idle so CRIU can dump us.
+        while True:
+            time.sleep(5)
+
+    # Continuous-training mode: keep stepping so the GPU stays active while
+    # the orchestrator CRIU-dumps us. This reproduces Task 1's contention —
+    # the 8 robots are still working during each forced migration — so a
+    # multi-agent motivation run measures dump/downtime/MTT under the same
+    # load instead of in an artificially idle state. The process stays fully
+    # dumpable between steps.
+    print("[hopper_agent] entering continuous-training mode "
+          "(keeps GPU active for CRIU contention)", flush=True)
+    step = steps
     while True:
-        time.sleep(5)
+        _update()
+        step += 1
+        if step % 500 == 0:
+            print(f"[hopper_agent] (continuous) step={step}", flush=True)
 
 
 if __name__ == "__main__":
@@ -171,5 +191,9 @@ if __name__ == "__main__":
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--save-path", required=True)
     p.add_argument("--ready-path", required=True)
+    p.add_argument("--keep-training", action="store_true",
+                   help="After warm-up, keep training (GPU active) instead of "
+                        "idling — reproduces Task 1's load during dumps.")
     args = p.parse_args()
-    train(args.steps, args.batch, args.save_path, args.ready_path)
+    train(args.steps, args.batch, args.save_path, args.ready_path,
+          keep_training=args.keep_training)

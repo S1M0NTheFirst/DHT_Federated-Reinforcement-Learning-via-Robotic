@@ -39,33 +39,47 @@ from metrics_collector import (  # noqa: E402
     real_criu_dump, get_container_pid, cuda_checkpoint_toggle,
 )
 
-IMAGE          = "swiftbot-motivation:latest"
-CONTAINER_NAME = "swiftbot-motivation-0"
-CHECKPOINT_VOL = "/tmp/swiftbot_motivation_vol"      # bind-mounted -> /checkpoints
-CRIU_OUT_DIR   = "/tmp/swiftbot_motivation_criu"     # CRIU image output (host)
-RESULTS_DIR    = os.path.join(HERE, "results")
-CSV_PATH       = os.path.join(RESULTS_DIR, "motivation.csv")
+IMAGE            = "swiftbot-motivation:latest"
+CONTAINER_PREFIX = "swiftbot-motivation"             # per-agent: <prefix>-<i>
+CHECKPOINT_BASE  = "/tmp/swiftbot_motivation_vol"    # per-agent: <base>/agent_<i>
+CRIU_OUT_BASE    = "/tmp/swiftbot_motivation_criu"   # per-agent: <base>/agent_<i>
+RESULTS_DIR      = os.path.join(HERE, "results")
+CSV_PATH         = os.path.join(RESULTS_DIR, "motivation.csv")
 
 
-def docker_run_container(steps: int, batch: int) -> str:
-    """Start the agent container. Returns container name."""
+def _container_name(i: int) -> str:
+    return f"{CONTAINER_PREFIX}-{i}"
+
+
+def _agent_vol(i: int) -> str:
+    return os.path.join(CHECKPOINT_BASE, f"agent_{i}")
+
+
+def _agent_criu_dir(i: int) -> str:
+    return os.path.join(CRIU_OUT_BASE, f"agent_{i}")
+
+
+def docker_run_container(i: int, steps: int, batch: int,
+                         keep_training: bool) -> str:
+    """Start agent container i with its own /checkpoints volume."""
+    name = _container_name(i)
     # Tear down any previous run.
-    subprocess.run(["docker", "rm", "-f", CONTAINER_NAME],
-                   capture_output=True, text=True)
-    os.makedirs(CHECKPOINT_VOL, exist_ok=True)
+    subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
+    vol = _agent_vol(i)
+    os.makedirs(vol, exist_ok=True)
     # Wipe stale ready marker / policy from a previous run.
     for f in ("hopper_ready.json", "hopper_policy.pt"):
-        p = os.path.join(CHECKPOINT_VOL, f)
+        p = os.path.join(vol, f)
         if os.path.exists(p):
             os.remove(p)
 
     cmd = [
-        "docker", "run", "-d", "--name", CONTAINER_NAME,
+        "docker", "run", "-d", "--name", name,
         "--shm-size=4g",
         "-e", "PYTHONUNBUFFERED=1",
         "-e", "NVIDIA_VISIBLE_DEVICES=all",
         "--gpus", "all",
-        "-v", f"{CHECKPOINT_VOL}:/checkpoints",
+        "-v", f"{vol}:/checkpoints",
         # Bind-mount the user's minari dataset cache so we don't re-download
         # inside the container. Falls back to in-container download if absent.
         "-v", f"{os.path.expanduser('~/.minari')}:/root/.minari",
@@ -78,16 +92,19 @@ def docker_run_container(steps: int, batch: int) -> str:
         "--save-path",  "/checkpoints/hopper_policy.pt",
         "--ready-path", "/checkpoints/hopper_ready.json",
     ]
-    print(f"[motivation] docker run: {' '.join(cmd)}", flush=True)
+    if keep_training:
+        cmd.append("--keep-training")
+    print(f"[motivation] docker run agent {i} -> {name}", flush=True)
     rr = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if rr.returncode != 0:
-        raise RuntimeError(f"docker run failed: {rr.stderr}")
-    return CONTAINER_NAME
+        raise RuntimeError(f"docker run failed for agent {i}: {rr.stderr}")
+    return name
 
 
-def wait_ready(timeout: int = 900) -> dict:
-    """Poll for the agent's ready marker on the shared volume."""
-    marker = os.path.join(CHECKPOINT_VOL, "hopper_ready.json")
+def wait_ready(i: int, timeout: int = 900) -> dict:
+    """Poll for agent i's ready marker on its shared volume."""
+    name = _container_name(i)
+    marker = os.path.join(_agent_vol(i), "hopper_ready.json")
     deadline = time.time() + timeout
     last_log = 0.0
     while time.time() < deadline:
@@ -96,15 +113,14 @@ def wait_ready(timeout: int = 900) -> dict:
                 return json.load(fh)
         if time.time() - last_log > 15:
             tail = subprocess.run(
-                ["docker", "logs", "--tail", "5", CONTAINER_NAME],
+                ["docker", "logs", "--tail", "3", name],
                 capture_output=True, text=True,
             )
-            print(f"[motivation] waiting for ready marker ... "
-                  f"last container log:\n{tail.stdout}{tail.stderr}",
-                  flush=True)
+            print(f"[motivation] agent {i}: waiting for ready marker ... "
+                  f"last log:\n{tail.stdout}{tail.stderr}", flush=True)
             last_log = time.time()
         time.sleep(2.0)
-    raise TimeoutError(f"agent did not write ready marker in {timeout}s")
+    raise TimeoutError(f"agent {i} did not write ready marker in {timeout}s")
 
 
 def _append_row(csv_path: str, row: dict) -> None:
