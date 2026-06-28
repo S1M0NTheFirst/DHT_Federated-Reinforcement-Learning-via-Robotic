@@ -23,13 +23,21 @@ This reproduces Task 1's full latency breakdown (dump / transfer / restore /
 downtime / MTT) on a single agent so Task 2's per-event latency is directly
 comparable to the criu_cold and criu_warm migration_events.csv columns.
 
+By default 8 agents run concurrently (--agents 8) with 5 forced migration
+events each (--events 5) — matching Task 1's 8 robots so each dump is measured
+under the same GPU/CPU/disk contention, not in isolation. Agents keep training
+during the sweep (use --idle to disable).
+
 Run as root (CRIU + cuda-checkpoint need it):
-  # cold (default):
+  # cold (default): 8 agents x 5 events = 40 rows
   sudo CRIU_BIN=criu /home/simon/miniconda3/envs/swiftbot/bin/python \
-       swiftbot_rl/motivation/run_motivation.py --repeat 15
+       swiftbot_rl/motivation/run_motivation.py
   # warm (pre-copy):
   sudo CRIU_BIN=criu /home/simon/miniconda3/envs/swiftbot/bin/python \
-       swiftbot_rl/motivation/run_motivation.py --warm --repeat 15
+       swiftbot_rl/motivation/run_motivation.py --warm
+  # quick smoke test (1 agent, 1 event):
+  sudo CRIU_BIN=criu /home/simon/miniconda3/envs/swiftbot/bin/python \
+       swiftbot_rl/motivation/run_motivation.py --agents 1 --events 1
 """
 import argparse, csv, json, os, random, shutil, subprocess, sys, time
 
@@ -159,17 +167,17 @@ COLD_RESTORE_MS = (600, 1000, 1400)
 WARM_RESTORE_MS = (200, 330, 500)
 
 
-def do_criu_cold(host_pid: int) -> dict:
+def do_criu_cold(host_pid: int, out_dir: str) -> dict:
     """Cold dump + transfer + simulated restore — mirrors
     trigger_criu_cold_migration in criu_cold/criu_cold_runner.py.
 
     Returns the same latency breakdown Task 1 records:
       size_mb, dump_ms, transfer_ms, restore_ms, downtime_ms, total_MTT_ms.
     """
-    if os.path.exists(CRIU_OUT_DIR):
-        shutil.rmtree(CRIU_OUT_DIR)
-    os.makedirs(CRIU_OUT_DIR, exist_ok=True)
-    chk_dst = CRIU_OUT_DIR + "_dest"
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    chk_dst = out_dir + "_dest"
     if os.path.exists(chk_dst):
         shutil.rmtree(chk_dst)
     os.makedirs(chk_dst, exist_ok=True)
@@ -181,13 +189,13 @@ def do_criu_cold(host_pid: int) -> dict:
 
     # Step 1: single full dump (real timing).
     t_dump = time.perf_counter()
-    res = real_criu_dump(host_pid, CRIU_OUT_DIR, parent_dir="",
+    res = real_criu_dump(host_pid, out_dir, parent_dir="",
                          pre_dump=False, leave_running=True, timeout=180)
     dump_ms = (time.perf_counter() - t_dump) * 1000
 
     # Step 2: transfer — sequential, must complete the dump first (real timing).
     t_xfer = time.perf_counter()
-    shutil.copytree(CRIU_OUT_DIR, os.path.join(chk_dst, "criu_cold"),
+    shutil.copytree(out_dir, os.path.join(chk_dst, "criu_cold"),
                     dirs_exist_ok=True)
     transfer_ms = (time.perf_counter() - t_xfer) * 1000
 
@@ -218,7 +226,7 @@ def do_criu_cold(host_pid: int) -> dict:
     }
 
 
-def do_criu_warm(host_pid: int, n_predumps: int = 3) -> dict:
+def do_criu_warm(host_pid: int, out_dir: str, n_predumps: int = 3) -> dict:
     """N pre-dumps + final delta dump + transfer + simulated restore — mirrors
     trigger_criu_warm_migration in criu_warm/criu_warm_runner.py.
 
@@ -226,11 +234,11 @@ def do_criu_warm(host_pid: int, n_predumps: int = 3) -> dict:
     Downtime counts only the final dump + restore — pre-copy keeps the app
     live during pre-dumps, again matching Task 1.
     """
-    warm_root = CRIU_OUT_DIR + "_warm"
+    warm_root = out_dir + "_warm"
     if os.path.exists(warm_root):
         shutil.rmtree(warm_root)
     os.makedirs(warm_root, exist_ok=True)
-    chk_dst = CRIU_OUT_DIR + "_warm_dest"
+    chk_dst = out_dir + "_warm_dest"
     if os.path.exists(chk_dst):
         shutil.rmtree(chk_dst)
     os.makedirs(chk_dst, exist_ok=True)
@@ -296,8 +304,56 @@ def do_criu_warm(host_pid: int, n_predumps: int = 3) -> dict:
     }
 
 
+def _measure_event(args, i: int, host_pid: int, policy_kb: float,
+                   event: int, criu_mode: str) -> None:
+    """Dump agent i once, derive the latency breakdown, append a CSV row."""
+    out_dir = _agent_criu_dir(i)
+    if args.warm:
+        m = do_criu_warm(host_pid, out_dir, args.predumps)
+    else:
+        m = do_criu_cold(host_pid, out_dir)
+
+    criu_mb = m["size_mb"]
+    ratio = (criu_mb * 1024) / policy_kb if policy_kb else 0.0
+    row = {
+        "job":                    args.job,
+        "criu_mode":              criu_mode,
+        "robot_id":               f"agent_{i}",
+        "migration_event_id":     event,
+        "criu_size_mb":           round(criu_mb, 2),
+        "app_policy_size_kb":     round(policy_kb, 2),
+        "ratio_criu_over_app":    round(ratio, 1),
+        "criu_returncode":        m["returncode"],
+        # Latency breakdown — same column names Task 1 writes to
+        # <condition>/results/migration_events.csv, so the two CSVs line up
+        # for a direct comparison.
+        "trigger_to_dump_ms":     round(m["dump_ms"], 0),
+        "dump_to_transfer_ms":    round(m["transfer_ms"], 0),
+        "transfer_to_restore_ms": round(m["restore_ms"], 0),
+        "dump_ms":                round(m["dump_ms"], 0),
+        "downtime_ms":            round(m["downtime_ms"], 0),
+        "total_MTT_ms":           round(m["total_MTT_ms"], 0),
+        "container_host_pid":     host_pid,
+        "steps":                  args.steps,
+        "batch":                  args.batch,
+        "timestamp":              time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    _append_row(CSV_PATH, row)
+    print(f"[motivation] agent_{i} event {event}: "
+          f"dump={row['dump_ms']:.0f}ms downtime={row['downtime_ms']:.0f}ms "
+          f"MTT={row['total_MTT_ms']:.0f}ms size={row['criu_size_mb']}MB "
+          f"rc={row['criu_returncode']} -> {CSV_PATH}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--agents", type=int, default=8,
+                    help="Number of concurrent hopper agents (default 8 — "
+                         "matches Task 1's 8 robots so dumps run under the "
+                         "same GPU/CPU/disk contention).")
+    ap.add_argument("--events", type=int, default=5,
+                    help="Forced migration events per agent (default 5 — "
+                         "matches Task 1). agents*events total CSV rows.")
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--job",   default="d4rl_hopper_medium_v2")
@@ -305,10 +361,10 @@ def main():
                     help="Run CRIU warm (pre-copy) instead of cold dump")
     ap.add_argument("--predumps", type=int, default=3,
                     help="Number of pre-dump iterations for --warm (default 3)")
-    ap.add_argument("--repeat", type=int, default=1,
-                    help="Number of migration events to measure on the same "
-                         "running agent (default 1). Use e.g. 10-20 to collect "
-                         "a latency distribution comparable to Task 1.")
+    ap.add_argument("--idle", action="store_true",
+                    help="Let agents idle after warm-up instead of training "
+                         "continuously. Default is continuous training so the "
+                         "GPU stays loaded during dumps, like Task 1.")
     args = ap.parse_args()
 
     if os.geteuid() != 0:
@@ -316,68 +372,56 @@ def main():
               "and criu dump will likely fail.", flush=True)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
+    keep_training = not args.idle
+    criu_mode = "warm" if args.warm else "cold"
+    names = [_container_name(i) for i in range(args.agents)]
 
     try:
-        docker_run_container(args.steps, args.batch)
-        ready = wait_ready()
-        policy_path_host = os.path.join(CHECKPOINT_VOL, "hopper_policy.pt")
-        policy_kb = os.path.getsize(policy_path_host) / 1024.0
-        print(f"[motivation] agent ready (container-pid={ready['pid']}); "
-              f"policy state_dict = {policy_kb:.1f} KB", flush=True)
+        # 1. Launch all agents concurrently so they share the GPU/CPU/disk.
+        for i in range(args.agents):
+            docker_run_container(i, args.steps, args.batch, keep_training)
 
-        host_pid = get_container_pid(CONTAINER_NAME)
-        if host_pid <= 0:
-            raise RuntimeError("could not resolve container host PID")
-        print(f"[motivation] container host PID = {host_pid}", flush=True)
+        # 2. Wait for every agent to finish warm-up + write its policy, then
+        #    resolve each container's host PID.
+        policy_kb = {}
+        host_pid  = {}
+        for i in range(args.agents):
+            ready = wait_ready(i)
+            policy_kb[i] = os.path.getsize(
+                os.path.join(_agent_vol(i), "hopper_policy.pt")) / 1024.0
+            pid = get_container_pid(_container_name(i))
+            if pid <= 0:
+                raise RuntimeError(f"could not resolve host PID for agent {i}")
+            host_pid[i] = pid
+            print(f"[motivation] agent_{i} ready: host_pid={pid} "
+                  f"policy={policy_kb[i]:.1f} KB", flush=True)
 
-        time.sleep(3.0)  # let RSS settle after torch.save
+        time.sleep(3.0)  # let RSS settle after the torch.save burst
 
-        criu_mode = "warm" if args.warm else "cold"
-        for event in range(args.repeat):
-            if args.repeat > 1:
-                print(f"[motivation] ---- migration event "
-                      f"{event + 1}/{args.repeat} ----", flush=True)
-            if args.warm:
-                m = do_criu_warm(host_pid, args.predumps)
-            else:
-                m = do_criu_cold(host_pid)
+        # 3. Forced migrations: per event round, dump every agent in turn.
+        #    All agents stay resident (and training, unless --idle) throughout,
+        #    so each dump is measured under the same contention as Task 1.
+        for event in range(args.events):
+            print(f"[motivation] ======== migration round "
+                  f"{event + 1}/{args.events} ({criu_mode}) ========",
+                  flush=True)
+            for i in range(args.agents):
+                try:
+                    _measure_event(args, i, host_pid[i], policy_kb[i],
+                                   event, criu_mode)
+                except Exception as e:
+                    # cuda-checkpoint can be brittle with concurrent CUDA
+                    # processes; don't let one bad dump abort the whole sweep.
+                    print(f"[motivation] ERROR agent_{i} event {event}: {e}",
+                          flush=True)
+            time.sleep(1.0)
 
-            criu_mb = m["size_mb"]
-            ratio = (criu_mb * 1024) / policy_kb if policy_kb else 0.0
-            row = {
-                "job":                    args.job,
-                "criu_mode":              criu_mode,
-                "migration_event_id":     event,
-                "criu_size_mb":           round(criu_mb, 2),
-                "app_policy_size_kb":     round(policy_kb, 2),
-                "ratio_criu_over_app":    round(ratio, 1),
-                "criu_returncode":        m["returncode"],
-                # Latency breakdown — same column names Task 1 writes to
-                # <condition>/results/migration_events.csv, so the two CSVs
-                # line up for a direct comparison.
-                "trigger_to_dump_ms":     round(m["dump_ms"], 0),
-                "dump_to_transfer_ms":    round(m["transfer_ms"], 0),
-                "transfer_to_restore_ms": round(m["restore_ms"], 0),
-                "dump_ms":                round(m["dump_ms"], 0),
-                "downtime_ms":            round(m["downtime_ms"], 0),
-                "total_MTT_ms":           round(m["total_MTT_ms"], 0),
-                "container_host_pid":     host_pid,
-                "steps":                  args.steps,
-                "batch":                  args.batch,
-                "timestamp":              time.strftime("%Y-%m-%dT%H:%M:%S"),
-            }
-            _append_row(CSV_PATH, row)
-
-            print("[motivation] ============ RESULT ============", flush=True)
-            for k, v in row.items():
-                print(f"  {k:24s} {v}", flush=True)
-            print(f"[motivation] appended row -> {CSV_PATH}", flush=True)
-            # Let the agent run a moment so the next event captures fresh state.
-            if event + 1 < args.repeat:
-                time.sleep(2.0)
+        print(f"[motivation] done — {args.agents} agents x {args.events} "
+              f"events appended to {CSV_PATH}", flush=True)
     finally:
-        subprocess.run(["docker", "rm", "-f", CONTAINER_NAME],
-                       capture_output=True, text=True)
+        for name in names:
+            subprocess.run(["docker", "rm", "-f", name],
+                           capture_output=True, text=True)
 
 
 if __name__ == "__main__":
