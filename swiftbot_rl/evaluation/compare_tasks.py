@@ -76,6 +76,19 @@ def load_rows(path, mode_filter=None):
     return [r for r in rows if _is_ok(r)]
 
 
+def load_task2(mode):
+    """Task 2 rows for a mode from motivation.csv; if that file has none for
+    this mode (e.g. cold not re-run after a schema rotation), fall back to the
+    rotated .old_schema file so the comparison still works."""
+    rows = load_rows(TASK2_CSV, mode)
+    if not rows and os.path.exists(TASK2_CSV + ".old_schema"):
+        rows = load_rows(TASK2_CSV + ".old_schema", mode)
+        if rows:
+            print(f"  (Task 2 {mode}: using {os.path.basename(TASK2_CSV)}"
+                  f".old_schema — {len(rows)} rows)")
+    return rows
+
+
 def normalize(rows, mode, bandwidth_mbps):
     """Re-derive transfer + MTT on the shared model. Returns list of dicts."""
     out = []
@@ -164,11 +177,11 @@ def main():
     print("Restore is simulated in both tasks; failed dumps (rc!=0) dropped.")
 
     t1_cold = normalize(load_rows(TASK1_COLD), "cold", bw)
-    t2_cold = normalize(load_rows(TASK2_CSV, "cold"), "cold", bw)
+    t2_cold = normalize(load_task2("cold"), "cold", bw)
     compare("COLD  (criu_cold  vs  motivation cold)", t1_cold, t2_cold)
 
     t1_warm = normalize(load_rows(TASK1_WARM), "warm", bw)
-    t2_warm = normalize(load_rows(TASK2_CSV, "warm"), "warm", bw)
+    t2_warm = normalize(load_task2("warm"), "warm", bw)
     compare("WARM  (criu_warm  vs  motivation warm)", t1_warm, t2_warm)
 
 
