@@ -12,7 +12,7 @@ Steps:
   3. `cuda-checkpoint --toggle` on the container PID (suspend CUDA).
   4. `criu dump --leave-running` with nvidia mounts as `--external`
      (same `real_criu_dump` helper criu_cold uses) — timed as dump_ms.
-  5. Transfer (copytree) the image set — timed as transfer_ms.
+  5. Transfer modeled as image_size / bandwidth — recorded as transfer_ms.
   6. Simulated restore window + `cuda-checkpoint --toggle` to resume CUDA —
      timed as restore_ms. Same triangular distributions as Task 1.
   7. Derive downtime_ms / total_MTT_ms exactly as Task 1's criu_cold /
@@ -166,9 +166,25 @@ def _dir_size_mb(path: str) -> float:
 COLD_RESTORE_MS = (600, 1000, 1400)
 WARM_RESTORE_MS = (200, 330, 500)
 
+# Default modeled transfer link speed (MB/s). 125 MB/s = 1 Gbps. The checkpoint
+# is shipped to the destination node as a byte stream over the network; we model
+# transfer = image_size / bandwidth instead of timing a file-by-file copytree.
+# copytree of the many-small-file CRIU image measures filesystem syscall
+# overhead + local-disk contention (which exploded to 70-180s/agent under 8
+# concurrent agents), NOT transfer throughput. Modeling bytes/bandwidth is the
+# standard live-migration approach, is contention-independent, and lets Task 1
+# and Task 2 be compared on the SAME basis (evaluation/compare_tasks.py applies
+# the identical formula to Task 1's recorded checkpoint sizes).
+DEFAULT_BANDWIDTH_MBPS = 125.0
 
-def do_criu_cold(host_pid: int, out_dir: str) -> dict:
-    """Cold dump + transfer + simulated restore — mirrors
+
+def _modeled_transfer_ms(size_mb: float, bandwidth_mbps: float) -> float:
+    return (size_mb / bandwidth_mbps) * 1000.0 if bandwidth_mbps > 0 else 0.0
+
+
+def do_criu_cold(host_pid: int, out_dir: str,
+                 bandwidth_mbps: float = DEFAULT_BANDWIDTH_MBPS) -> dict:
+    """Cold dump + modeled transfer + simulated restore — mirrors
     trigger_criu_cold_migration in criu_cold/criu_cold_runner.py.
 
     Returns the same latency breakdown Task 1 records:
@@ -177,10 +193,6 @@ def do_criu_cold(host_pid: int, out_dir: str) -> dict:
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
-    chk_dst = out_dir + "_dest"
-    if os.path.exists(chk_dst):
-        shutil.rmtree(chk_dst)
-    os.makedirs(chk_dst, exist_ok=True)
 
     t_trigger = time.perf_counter()
 
@@ -192,12 +204,11 @@ def do_criu_cold(host_pid: int, out_dir: str) -> dict:
     res = real_criu_dump(host_pid, out_dir, parent_dir="",
                          pre_dump=False, leave_running=True, timeout=180)
     dump_ms = (time.perf_counter() - t_dump) * 1000
+    size_mb = res["size_mb"]
 
-    # Step 2: transfer — sequential, must complete the dump first (real timing).
-    t_xfer = time.perf_counter()
-    shutil.copytree(out_dir, os.path.join(chk_dst, "criu_cold"),
-                    dirs_exist_ok=True)
-    transfer_ms = (time.perf_counter() - t_xfer) * 1000
+    # Step 2: transfer — modeled as shipping the image over a fixed-bandwidth
+    # link (size / bandwidth), not a local file copy. See DEFAULT_BANDWIDTH_MBPS.
+    transfer_ms = _modeled_transfer_ms(size_mb, bandwidth_mbps)
 
     # Step 3: simulated restore (cold: 600-1400ms). Resume CUDA inside the
     # restore window, exactly as Task 1 does.
@@ -207,14 +218,15 @@ def do_criu_cold(host_pid: int, out_dir: str) -> dict:
         print("[motivation] WARNING cuda-checkpoint resume failed.", flush=True)
     restore_ms = (time.perf_counter() - t_restore) * 1000
 
-    total_MTT_ms = (time.perf_counter() - t_trigger) * 1000
+    # MTT = real wall time (suspend + dump + restore) + modeled transfer.
+    total_MTT_ms = (time.perf_counter() - t_trigger) * 1000 + transfer_ms
 
     if res["returncode"] != 0:
         print(f"[motivation] WARNING criu rc={res['returncode']}: "
               f"{res['stderr'][:400]}", flush=True)
 
     return {
-        "size_mb":      res["size_mb"],
+        "size_mb":      size_mb,
         "dump_ms":      dump_ms,
         "transfer_ms":  transfer_ms,
         "restore_ms":   restore_ms,
@@ -226,9 +238,10 @@ def do_criu_cold(host_pid: int, out_dir: str) -> dict:
     }
 
 
-def do_criu_warm(host_pid: int, out_dir: str, n_predumps: int = 3) -> dict:
-    """N pre-dumps + final delta dump + transfer + simulated restore — mirrors
-    trigger_criu_warm_migration in criu_warm/criu_warm_runner.py.
+def do_criu_warm(host_pid: int, out_dir: str, n_predumps: int = 3,
+                 bandwidth_mbps: float = DEFAULT_BANDWIDTH_MBPS) -> dict:
+    """N pre-dumps + final delta dump + modeled transfer + simulated restore —
+    mirrors trigger_criu_warm_migration in criu_warm/criu_warm_runner.py.
 
     Total size = sum of all pre-dump dirs + final dir (same as Task 1).
     Downtime counts only the final dump + restore — pre-copy keeps the app
@@ -238,10 +251,6 @@ def do_criu_warm(host_pid: int, out_dir: str, n_predumps: int = 3) -> dict:
     if os.path.exists(warm_root):
         shutil.rmtree(warm_root)
     os.makedirs(warm_root, exist_ok=True)
-    chk_dst = out_dir + "_warm_dest"
-    if os.path.exists(chk_dst):
-        shutil.rmtree(chk_dst)
-    os.makedirs(chk_dst, exist_ok=True)
 
     t_trigger = time.perf_counter()
 
@@ -270,11 +279,11 @@ def do_criu_warm(host_pid: int, out_dir: str, n_predumps: int = 3) -> dict:
                                pre_dump=False, leave_running=True, timeout=180)
     dump_ms = (time.perf_counter() - t_dump) * 1000
 
-    # Transfer the whole image set (real timing).
-    t_xfer = time.perf_counter()
-    shutil.copytree(warm_root, os.path.join(chk_dst, "criu_warm"),
-                    dirs_exist_ok=True)
-    transfer_ms = (time.perf_counter() - t_xfer) * 1000
+    total_mb = _dir_size_mb(warm_root)
+
+    # Transfer — modeled as shipping the whole image set over a fixed-bandwidth
+    # link (size / bandwidth), not a file-by-file copy. See DEFAULT_BANDWIDTH_MBPS.
+    transfer_ms = _modeled_transfer_ms(total_mb, bandwidth_mbps)
 
     # Simulated restore (warm: 200-500ms). Resume CUDA inside the window.
     t_restore = time.perf_counter()
@@ -283,13 +292,14 @@ def do_criu_warm(host_pid: int, out_dir: str, n_predumps: int = 3) -> dict:
         print("[motivation] WARNING cuda-checkpoint resume failed.", flush=True)
     restore_ms = (time.perf_counter() - t_restore) * 1000
 
-    total_MTT_ms = (time.perf_counter() - t_trigger) * 1000
+    # MTT = real wall time (suspend + pre-dumps + final dump + restore) +
+    # modeled transfer.
+    total_MTT_ms = (time.perf_counter() - t_trigger) * 1000 + transfer_ms
 
     if res_final["returncode"] != 0:
         print(f"[motivation] WARNING final dump rc={res_final['returncode']}: "
               f"{res_final['stderr'][:400]}", flush=True)
 
-    total_mb = _dir_size_mb(warm_root)
     print(f"[motivation] warm total size = {total_mb:.2f} MB "
           f"(all pre-dump dirs + final)", flush=True)
     return {
@@ -309,9 +319,9 @@ def _measure_event(args, i: int, host_pid: int, policy_kb: float,
     """Dump agent i once, derive the latency breakdown, append a CSV row."""
     out_dir = _agent_criu_dir(i)
     if args.warm:
-        m = do_criu_warm(host_pid, out_dir, args.predumps)
+        m = do_criu_warm(host_pid, out_dir, args.predumps, args.bandwidth_mbps)
     else:
-        m = do_criu_cold(host_pid, out_dir)
+        m = do_criu_cold(host_pid, out_dir, args.bandwidth_mbps)
 
     criu_mb = m["size_mb"]
     ratio = (criu_mb * 1024) / policy_kb if policy_kb else 0.0
@@ -323,6 +333,7 @@ def _measure_event(args, i: int, host_pid: int, policy_kb: float,
         "criu_size_mb":           round(criu_mb, 2),
         "app_policy_size_kb":     round(policy_kb, 2),
         "ratio_criu_over_app":    round(ratio, 1),
+        "transfer_bandwidth_mbps": args.bandwidth_mbps,
         "criu_returncode":        m["returncode"],
         # Latency breakdown — same column names Task 1 writes to
         # <condition>/results/migration_events.csv, so the two CSVs line up
@@ -361,6 +372,13 @@ def main():
                     help="Run CRIU warm (pre-copy) instead of cold dump")
     ap.add_argument("--predumps", type=int, default=3,
                     help="Number of pre-dump iterations for --warm (default 3)")
+    ap.add_argument("--bandwidth-mbps", type=float,
+                    default=DEFAULT_BANDWIDTH_MBPS,
+                    help=f"Modeled transfer link speed in MB/s "
+                         f"(default {DEFAULT_BANDWIDTH_MBPS:.0f} = 1 Gbps). "
+                         f"transfer_ms = image_size / bandwidth. The same value "
+                         f"must be passed to compare_tasks.py so Task 1 and "
+                         f"Task 2 use an identical transfer model.")
     ap.add_argument("--idle", action="store_true",
                     help="Let agents idle after warm-up instead of training "
                          "continuously. Default is continuous training so the "
