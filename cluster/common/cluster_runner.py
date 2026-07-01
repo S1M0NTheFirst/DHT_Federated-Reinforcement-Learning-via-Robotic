@@ -1,0 +1,750 @@
+"""
+Shared host-side orchestration helpers used by every condition runner on the
+cluster. The host-side runner runs on the SERVER node (the one that also
+hosts Redis and, for Condition A, the Flower server).
+
+Key differences vs the workstation runners:
+  - No Docker SDK. Containers are apptainer instances launched via SSH.
+  - No localhost. Redis and Flower live on $SERVER_NODE; clients live on
+    $CLIENT_NODE_1 and $CLIENT_NODE_2.
+  - Migration is always cross-node (a robot on C1 migrates to C2 and vice
+    versa). The runner picks the destination per event.
+  - CRIU images are written under $CHECKPOINT_BASE on the source node and
+    rsync'd to the destination node before restore.
+
+Environment variables (set by run_X.sh before invoking the runner):
+    SERVER_NODE, CLIENT_NODE_1, CLIENT_NODE_2,
+    REDIS_HOST, REDIS_PORT, FLOWER_PORT,
+    NUM_CLIENTS, ROBOTS_PER_NODE, MIGRATION_OFFSET, TOTAL_TASKS,
+    PROJECT_ROOT, SWIFTBOT_RL_ROOT, IMG_DIR,
+    RUN_LOG_DIR, RESULTS_DIR, CONDITION,
+    SIMULATE_CRIU
+"""
+from __future__ import annotations
+
+import atexit
+import csv
+import json
+import logging
+import os
+import shlex
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+from typing import Optional
+
+LOG = logging.getLogger("cluster_runner")
+
+
+# --------------------------------------------------------------------------- #
+# Config — read once at import time from environment.                         #
+# --------------------------------------------------------------------------- #
+
+def _env(name: str, default: Optional[str] = None) -> str:
+    v = os.environ.get(name, default)
+    if v is None:
+        raise RuntimeError(f"Required env var {name} is not set")
+    return v
+
+
+class ClusterConfig:
+    def __init__(self) -> None:
+        self.server_node    = _env("SERVER_NODE")
+        self.client_nodes   = [_env("CLIENT_NODE_1"), _env("CLIENT_NODE_2")]
+        self.redis_host     = _env("REDIS_HOST", self.server_node)
+        self.redis_port     = int(_env("REDIS_PORT", "6470"))
+        self.flower_port    = int(_env("FLOWER_PORT", "8470"))
+        self.num_clients    = int(_env("NUM_CLIENTS", "20"))
+        self.robots_per_node = int(_env("ROBOTS_PER_NODE", "10"))
+        self.migration_offset = int(_env("MIGRATION_OFFSET", "10"))
+        self.total_tasks    = int(_env("TOTAL_TASKS", "1200"))
+        self.project_root   = _env("PROJECT_ROOT")
+        self.swiftbot_root  = _env("SWIFTBOT_RL_ROOT")
+        self.img_dir        = _env("IMG_DIR")
+        self.run_log_dir    = _env("RUN_LOG_DIR")
+        self.results_dir    = _env("RESULTS_DIR")
+        self.condition      = _env("CONDITION")
+        self.simulate_criu   = _env("SIMULATE_CRIU", "0") == "1"
+        self.total_fl_rounds = int(_env("TOTAL_FL_ROUNDS", "60"))
+        self.checkpoint_base = f"/tmp/swiftbot_{self.condition}"
+
+    def home_node_for_client(self, cid: int) -> str:
+        """Initial node for client cid before any migration (round-robin)."""
+        return self.client_nodes[cid // self.robots_per_node]
+
+    def other_node(self, node: str) -> str:
+        return self.client_nodes[1] if node == self.client_nodes[0] else self.client_nodes[0]
+
+
+# --------------------------------------------------------------------------- #
+# SSH helpers — every cross-node action goes through these.                   #
+# --------------------------------------------------------------------------- #
+
+# SSH connection strategy (V3 — per-robot mux):
+#
+# This cluster's sshd appears to enforce a tight MaxSessions limit on each
+# multiplexed master: when 10 worker SSHs share one master TCP, attempts to
+# open an 11th session (the migration relaunch) get "Session open refused
+# by peer". And without multiplexing entirely, 10+ simultaneous fresh TCPs
+# trip MaxStartups → "Connection closed by … port 22".
+#
+# Solution: give EACH robot its own dedicated ControlPath socket keyed by
+# (cid, host). Effects:
+#   - Each ssh has its own master TCP with only 1-2 sessions on it (the
+#     worker + occasional pkill) → never near MaxSessions.
+#   - The pre-master phase establishes 10 connections per node spaced 1s
+#     apart → well under MaxStartups.
+#   - Migration relaunches go through a FRESH master (different host) →
+#     no contention with existing sessions on either node.
+#
+# ControlPath includes PBS_JOBID so concurrent jobs don't collide.
+_SSH_CTRL_DIR = "/tmp/ssh-mux-%s" % os.environ.get("PBS_JOBID", str(os.getpid()))
+os.makedirs(_SSH_CTRL_DIR, exist_ok=True)
+
+# Base options used for non-robot SSH calls (Redis startup, generic ssh_run).
+# These do NOT include multiplexing — non-robot calls are rare so a fresh
+# TCP each time is fine and avoids master-process bookkeeping.
+_SSH_OPTS = [
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "BatchMode=yes",
+    # Bumped 10 → 30: under migration waves we saw mkdir SSH calls hit the
+    # 10s ConnectTimeout, which raised TimeoutExpired out of trigger_fn and
+    # left workers stranded mid-migration (killed-but-not-relaunched).
+    "-o", "ConnectTimeout=30",
+]
+
+
+def _cid_ctrl_path(cid: int) -> str:
+    """ControlPath for robot `cid`. Per-cid sockets isolate each worker's
+    SSH on its own TCP — no shared MaxSessions pressure."""
+    return f"{_SSH_CTRL_DIR}/cid{cid}-%r@%h:%p"
+
+
+def _ssh_opts_for_cid(cid: int) -> list[str]:
+    """Build SSH options that route robot `cid` through its own master."""
+    return _SSH_OPTS + [
+        "-o", "ControlMaster=auto",
+        "-o", f"ControlPath={_cid_ctrl_path(cid)}",
+        # 60s persist (was 10m). Shorter persist means lingering masters
+        # die quickly after runner exits → MOAB marks the job complete faster.
+        "-o", "ControlPersist=60",
+    ]
+
+
+def establish_ssh_master(node: str, cid: int) -> None:
+    """Pre-open a persistent SSH master for `cid` on `node` before launching its
+    worker. Each robot gets its own master TCP so MaxSessions can't be hit.
+
+    FAIL-SOFT: some cluster nodes answer plain SSH but hang on control-master
+    mode (`ssh -M -f -N`) — observed on several HPC2 nodes. Pre-establishment
+    is only an optimization (it spreads out TCP setup to dodge sshd MaxStartups
+    bursts); it is NOT required for correctness. So a timeout/failure here is
+    logged and swallowed rather than crashing the whole run — ControlMaster=auto
+    will open a connection on demand when the worker actually launches."""
+    if is_local_node(node):
+        return
+    cmd = ["ssh", *_ssh_opts_for_cid(cid), "-M", "-f", "-N", node]
+    try:
+        subprocess.run(cmd, check=False, timeout=10)
+    except subprocess.TimeoutExpired:
+        LOG.warning("[SSH] master pre-establish to %s (cid %d) timed out — "
+                    "continuing without it (ControlMaster=auto opens on demand)",
+                    node, cid)
+    except Exception as e:
+        LOG.warning("[SSH] master pre-establish to %s (cid %d) failed: %r — "
+                    "continuing", node, cid, e)
+
+
+def close_ssh_master(node: str, cid: int) -> None:
+    """Tear down the persistent master for `cid` on `node`. Non-blocking —
+    fires the ssh -O exit and returns immediately. With 40+ masters to
+    close at shutdown, serial blocking close would take 5-10 minutes if any
+    sockets are slow to respond; fire-and-forget reduces that to ~0s."""
+    if is_local_node(node):
+        return
+    cmd = ["ssh", *_ssh_opts_for_cid(cid), "-O", "exit", node]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def close_all_ssh_masters_fast() -> None:
+    """One-shot nuke: kill every lingering ssh process owned by this user that
+    is in master mode (was forked with -M). Safe to call from EXIT trap as a
+    last resort when close_ssh_master loops are too slow."""
+    try:
+        subprocess.run(
+            ["pkill", "-KILL", "-u", os.environ.get("USER", ""), "-f",
+             "ssh.*ControlPath.*ssh-mux"],
+            check=False, timeout=10,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
+# Cache the local hostname at import time. Some clusters (CSULB HPC2 included)
+# refuse SSH from a node to itself, so any "remote" command targeting the
+# local node must be run as a plain bash subprocess instead of through SSH.
+_LOCAL_FQDN = socket.getfqdn()
+try:
+    _LOCAL_SHORT = socket.gethostname().split(".")[0]
+except Exception:
+    _LOCAL_SHORT = _LOCAL_FQDN.split(".")[0]
+
+
+def is_local_node(node: str) -> bool:
+    """Return True if `node` refers to the host this Python process runs on."""
+    if not node:
+        return False
+    if node == _LOCAL_FQDN or node == _LOCAL_SHORT:
+        return True
+    # Match short-name + any domain suffix ("n034" vs "n034.cluster.pssclabs.com")
+    n_short = node.split(".")[0]
+    return n_short == _LOCAL_SHORT
+
+def ssh_run(node: str, command: str, *, timeout: int = 60,
+            check: bool = False, retries: int = 2) -> subprocess.CompletedProcess:
+    """Run a remote shell command and capture output. If `node` is the local
+    host, runs the command via a local bash subprocess (this cluster refuses
+    SSH from a node to itself).
+
+    Retries on TimeoutExpired up to `retries` extra times with 2s backoff —
+    transient sshd MaxStartups bursts during migration waves can cause a
+    single SSH call to stall, and propagating that as TimeoutExpired into
+    trigger_fn strands the worker mid-migration.
+    """
+    if is_local_node(node):
+        return subprocess.run(["bash", "-c", command],
+                              capture_output=True, text=True,
+                              timeout=timeout, check=check)
+    cmd = ["ssh", *_SSH_OPTS, "-n", node, command]
+    last_exc: Optional[BaseException] = None
+    for attempt in range(retries + 1):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout, check=check)
+        except subprocess.TimeoutExpired as e:
+            last_exc = e
+            LOG.warning("[ssh_run] timeout on %s (attempt %d/%d): %s",
+                        node, attempt + 1, retries + 1, command[:80])
+            time.sleep(2)
+    raise last_exc  # type: ignore[misc]
+
+
+def ssh_run_async(node: str, command: str, log_path: str) -> subprocess.Popen:
+    """Run a remote command, streaming stdout/stderr to log_path on the runner host.
+    Falls back to local bash for self-targeted commands.
+    """
+    fh = open(log_path, "ab", buffering=0)
+    if is_local_node(node):
+        return subprocess.Popen(["bash", "-c", command],
+                                stdout=fh, stderr=fh, stdin=subprocess.DEVNULL)
+    cmd = ["ssh", *_SSH_OPTS, "-n", node, command]
+    return subprocess.Popen(cmd, stdout=fh, stderr=fh, stdin=subprocess.DEVNULL)
+
+
+# NOTE: ssh_detached() removed deliberately. The previous implementation
+# used `ssh -f` + `nohup ... &` which double-detached the remote process —
+# exactly the orphan pattern the cluster admin asked us to stop using
+# (caused stuck containers requiring node reboot). Every remote process
+# must now be launched as a tracked Popen child of the runner. Use
+# ssh_run_async() and register_tracked_process() instead.
+
+
+# --------------------------------------------------------------------------- #
+# Tracked-process registry — every long-lived SSH/apptainer Popen we spawn    #
+# is recorded here so we can terminate it cleanly on signal/exit. This is    #
+# the cluster admin's requirement: "Ensure all processes stay tied to the   #
+# job ... ensure Apptainer is run in the foreground within the job script". #
+# --------------------------------------------------------------------------- #
+
+_tracked_lock = threading.Lock()
+_tracked_processes: list[tuple[subprocess.Popen, str]] = []
+_robot_procs: dict[int, tuple[subprocess.Popen, str]] = {}
+_signal_handlers_installed = False
+
+# CIDs that were just killed and are about to be relaunched as part of a
+# migration. launch_robot consults this to decide whether to use the SSH
+# multiplex (initial bulk launch) or bypass it (migration relaunch — the
+# old session may still be occupying a mux slot, causing "Session open
+# refused by peer"). Cleared by launch_robot after a successful Popen.
+_recently_killed_cids: set[int] = set()
+
+
+def register_tracked_process(p: subprocess.Popen, desc: str = "") -> None:
+    with _tracked_lock:
+        _tracked_processes.append((p, desc))
+
+
+def _terminate_one(p: subprocess.Popen, desc: str, *, hard_after: float) -> None:
+    if p.poll() is not None:
+        return
+    try:
+        p.terminate()
+    except Exception:
+        pass
+    try:
+        p.wait(timeout=hard_after)
+    except subprocess.TimeoutExpired:
+        try:
+            p.kill()
+        except Exception:
+            pass
+        try:
+            p.wait(timeout=2)
+        except Exception:
+            pass
+
+
+def terminate_all_tracked(*, hard_after: float = 5.0) -> None:
+    with _tracked_lock:
+        snap = list(_tracked_processes)
+    LOG.info("[Cleanup] terminating %d tracked SSH/apptainer processes", len(snap))
+    threads = []
+    for p, desc in snap:
+        t = threading.Thread(target=_terminate_one,
+                             args=(p, desc),
+                             kwargs={"hard_after": hard_after},
+                             daemon=True)
+        t.start(); threads.append(t)
+    for t in threads:
+        t.join(timeout=hard_after + 2)
+
+
+def install_signal_handlers() -> None:
+    """Install SIGTERM/SIGINT handlers and an atexit hook that terminate
+    every tracked SSH/apptainer Popen. Idempotent.
+    """
+    global _signal_handlers_installed
+    if _signal_handlers_installed:
+        return
+
+    def _handler(signum, _frame):
+        LOG.warning("[Signal] received signal %d — terminating all tracked workers",
+                    signum)
+        terminate_all_tracked(hard_after=5.0)
+        # Re-raise default behavior so the parent shell sees the exit code.
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT,  _handler)
+    atexit.register(lambda: terminate_all_tracked(hard_after=2.0))
+    _signal_handlers_installed = True
+
+
+def rsync_dir(src_node: str, src_path: str, dst_node: str, dst_path: str,
+              timeout: int = 600) -> dict:
+    """rsync a directory between two cluster nodes via SSH. Returns
+    dict(returncode, bytes_transferred, elapsed_ms)."""
+    t0 = time.perf_counter()
+    # Pull-style rsync: ssh into dst_node and have IT rsync from src_node.
+    # This way the source's images don't have to first be copied to the
+    # runner host (which may not even have access to the src node's /tmp).
+    cmd = (
+        f"mkdir -p {shlex.quote(dst_path)} && "
+        f"rsync -aH --info=stats2 -e 'ssh -o StrictHostKeyChecking=no -o BatchMode=yes' "
+        f"{shlex.quote(src_node)}:{shlex.quote(src_path)}/ "
+        f"{shlex.quote(dst_path)}/"
+    )
+    rr = ssh_run(dst_node, cmd, timeout=timeout)
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    bytes_xfer = 0
+    for line in (rr.stdout or "").splitlines():
+        if line.lower().startswith("total transferred file size:"):
+            bytes_xfer = int(line.split(":", 1)[1].strip().split()[0].replace(",", ""))
+    return {"returncode": rr.returncode, "bytes_transferred": bytes_xfer,
+            "elapsed_ms": elapsed_ms,
+            "stderr": (rr.stderr or "")[-500:]}
+
+
+# --------------------------------------------------------------------------- #
+# Apptainer instance launching.                                               #
+# --------------------------------------------------------------------------- #
+
+def apptainer_instance_name(cid: int) -> str:
+    return f"swiftbot_robot_{cid:03d}"
+
+
+def launch_robot(cfg: ClusterConfig, node: str, cid: int, image: str,
+                 worker_script: str, *, extra_env: Optional[dict] = None,
+                 container_type: str = "gpu_specialist") -> None:
+    """Launch one robot worker on `node` as a tracked SSH+apptainer-exec child.
+
+    Important behavior changes vs the previous version (do NOT revert):
+      - Uses `apptainer exec` in the FOREGROUND of the SSH session. We do
+        NOT call `apptainer instance start` anymore — that creates a
+        persistent "Apptainer runtime parent" that survives the job.
+      - The SSH process is a tracked Popen child of THIS runner. When the
+        runner dies (clean exit, signal, or job termination) the SSH
+        client dies, the remote sshd HUPs apptainer-exec, which kills the
+        worker. No orphans.
+      - The remote command uses `exec env ...` so apptainer-exec REPLACES
+        the bash that sshd spawned, ensuring SIGHUP propagates straight to
+        apptainer (bash by default doesn't forward HUP to children).
+    """
+    chk = f"{cfg.checkpoint_base}/{apptainer_instance_name(cid)}"
+    log = f"{cfg.run_log_dir}/robot_{cid:03d}.log"
+
+    pylibs_host = os.path.join(cfg.img_dir, "pylibs")
+    cluster_root = os.environ.get("CLUSTER_ROOT") or \
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    worker_path = worker_script if worker_script.startswith("/") else f"/app/{worker_script}"
+    # Per-worker math-library thread cap (see env_pairs below). Default 4 gives
+    # mild contention so success_rate sits below 1.0; override with
+    # WORKER_MATH_THREADS to calibrate difficulty without editing code.
+    _math_threads = os.environ.get("WORKER_MATH_THREADS", "4")
+
+    env_pairs = {
+        "REDIS_HOST":       cfg.redis_host,
+        "REDIS_PORT":       cfg.redis_port,
+        "MASTER_ADDRESS":   f"{cfg.server_node}:{cfg.flower_port}",
+        "NUM_CLIENTS":      cfg.num_clients,
+        "MIGRATION_OFFSET": cfg.migration_offset,
+        "TOTAL_TASKS":      cfg.total_tasks,
+        "TOTAL_FL_ROUNDS":  cfg.total_fl_rounds,
+        "PYTHONUNBUFFERED": 1,
+        "PYTHONPATH":       "/pylibs:/app:/robot_lib",
+        # Cap math-library threads per worker. ROBOTS_PER_NODE (=10) workers
+        # share ppn (=8) cores; the default spawns 8 BLAS threads PER worker
+        # (~80 threads on 8 cores) -> thrash + node asymmetry. This knob also
+        # tunes task difficulty: too few threads -> tasks finish well under the
+        # deadline -> success_rate pegs at 1.0 (no regression headroom); more
+        # threads -> mild contention -> some tasks miss the deadline -> success
+        # sits below 1.0 with room to dip after migration. Calibrate per run
+        # with `msub -v WORKER_MATH_THREADS=N ...` without re-uploading code.
+        "OMP_NUM_THREADS":      _math_threads,
+        "OPENBLAS_NUM_THREADS": _math_threads,
+        "MKL_NUM_THREADS":      _math_threads,
+        "NUMEXPR_NUM_THREADS":  _math_threads,
+    }
+    if extra_env:
+        env_pairs.update(extra_env)
+    env_prefix = " ".join(
+        f"APPTAINERENV_{k}={shlex.quote(str(v))} "
+        f"SINGULARITYENV_{k}={shlex.quote(str(v))}"
+        for k, v in env_pairs.items()
+    )
+
+    # Foreground apptainer exec. `exec` makes apptainer the immediate child
+    # of sshd so SIGHUP on connection close propagates without bash in the way.
+    # Non-interactive SSH does not source ~/.bashrc, so apptainer (in the
+    # conda env) is not on PATH on remote nodes. Source conda first.
+    conda_base = os.environ.get("CONDA_BASE", "/home/029822154/miniconda3")
+    conda_env = os.environ.get("CONDA_ENV", "swiftbot")
+    # Workers do `sys.path.insert(0, "/app/robot")` then `import task_generator`
+    # but the actual file lives at swiftbot_rl/dht_frl/robot/task_generator.py.
+    # Binding to /app/robot fails ("file exists" inside the /app bind layer),
+    # so bind it elsewhere and add to PYTHONPATH — Python finds it before the
+    # broken sys.path.insert kicks in.
+    robot_dir_host = os.path.join(cfg.swiftbot_root, "dht_frl", "robot")
+    remote_cmd = (
+        f"mkdir -p {shlex.quote(chk)}; "
+        f"source {shlex.quote(conda_base)}/bin/activate {shlex.quote(conda_env)} && "
+        f"exec env {env_prefix} apptainer exec "
+        f"--bind {shlex.quote(cfg.swiftbot_root)}:/app "
+        f"--bind {shlex.quote(robot_dir_host)}:/robot_lib "
+        f"--bind {shlex.quote(cluster_root)}:/cluster_app "
+        f"--bind {shlex.quote(chk)}:/checkpoints "
+        f"--bind {shlex.quote(pylibs_host)}:/pylibs "
+        f"{shlex.quote(cfg.img_dir + '/' + image)} "
+        # NUM_CLIENTS passed via APPTAINERENV_NUM_CLIENTS, not CLI — the
+        # frozen swiftbot_rl/cold_restart/worker_random_client.py doesn't
+        # accept --num-clients, and our cluster worker has a default+env.
+        f"python3 {shlex.quote(worker_path)} "
+        f"--client-id {cid} "
+        f"--container-type {shlex.quote(container_type)}"
+    )
+
+    log_fh = open(log, "ab", buffering=0)
+    if is_local_node(node):
+        # Local launch — apptainer exec runs as a direct child of this Python
+        # process. No SSH needed (and on this cluster impossible). The Popen
+        # is still tracked so cleanup terminates it.
+        cmd = ["bash", "-c", remote_cmd]
+    else:
+        # Per-cid mux: each robot gets its own master TCP. On a migration
+        # relaunch the (cid, dst_node) pair is fresh, so a new master is
+        # established automatically by ControlMaster=auto — no contention.
+        cmd = ["ssh", *_ssh_opts_for_cid(cid),
+               "-o", "ServerAliveInterval=30",
+               "-o", "ServerAliveCountMax=3",
+               "-n", node, remote_cmd]
+    p = subprocess.Popen(cmd,
+                         stdin=subprocess.DEVNULL,
+                         stdout=log_fh, stderr=log_fh)
+    register_tracked_process(p, f"robot_{cid:03d}@{node}")
+    with _tracked_lock:
+        _robot_procs[cid] = (p, node)
+    _recently_killed_cids.discard(cid)
+
+
+def kill_robot(cfg: ClusterConfig, node: str, cid: int) -> None:
+    """Stop a robot by terminating its tracked SSH Popen, then belt-and-suspenders
+    pkill on the remote node to catch anything that didn't die from SIGHUP.
+    """
+    _recently_killed_cids.add(cid)
+    with _tracked_lock:
+        pair = _robot_procs.pop(cid, None)
+    if pair is not None:
+        p, _node = pair
+        _terminate_one(p, f"robot_{cid:03d}", hard_after=5.0)
+    # Remote pkill — catches any worker whose parent SSH was already gone
+    # (e.g. retry case) or that ignored SIGHUP for some reason. Route through
+    # the per-cid SSH master (already established for this worker) instead of
+    # opening a fresh TCP via ssh_run — under load, fresh TCPs were timing
+    # out at 15s, raising TimeoutExpired in the migration loop and leaving
+    # the robot in a zombie state (killed but never relaunched).
+    if not is_local_node(node):
+        try:
+            subprocess.run(
+                ["ssh", *_ssh_opts_for_cid(cid), "-n", node,
+                 f"pkill -9 -u $USER -f '\\-\\-client-id {cid} --container-type' "
+                 f"2>/dev/null || true"],
+                timeout=15, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            # Best-effort — the Popen kill above already sent SIGHUP via sshd,
+            # so the worker should be dead. Don't propagate so the relaunch
+            # can proceed.
+            pass
+    else:
+        subprocess.run(
+            ["bash", "-c",
+             f"pkill -9 -u $USER -f '\\-\\-client-id {cid} --container-type' "
+             f"2>/dev/null || true"],
+            timeout=15, check=False,
+        )
+    # DO NOT close the per-cid SSH master here. We pre-establish masters on
+    # BOTH client nodes at startup so future migrations (which may come back
+    # to THIS node) can reuse them instead of paying a fresh-TCP cost and
+    # risking MaxStartups bursts. Masters are only torn down at runner exit
+    # (run_baseline's finally block).
+
+
+# --------------------------------------------------------------------------- #
+# Migration metrics CSV writer — same column set as workstation runs.         #
+# --------------------------------------------------------------------------- #
+
+class MigrationMetricsWriter:
+    FIELDNAMES = [
+        "condition", "robot_id", "migration_event_id", "timestamp",
+        "src_node", "dst_node",
+        "trigger_to_dump_ms", "dump_to_transfer_ms", "transfer_to_restore_ms",
+        "policy_load_ms", "downtime_ms", "total_MTT_ms",
+        "success_rate_pre", "success_rate_post", "regression_pct",
+        "fl_rounds_to_recover",
+        "replay_buffer_entries_restored",
+        "gpu_util_pre_migration", "gpu_util_during_migration", "gpu_util_post_migration",
+        "cpu_util_pre_migration", "cpu_util_during_migration", "cpu_util_post_migration",
+        "network_bytes_transferred",
+        "checkpoint_size_mb",
+        "criu_mode",
+        # --- added for ATC revision ---
+        # Post-migration behavioral continuity (advisor request): how fast the
+        # robot returns to productive work after restore.
+        "throughput_post_60s",      # tasks completed in the 60s after resume
+        "recovery_tasks_to_pre",    # #tasks until rolling-10 sr >= pre (-1 if not recovered)
+        # Condition D pre-copy cost: continuous background bandwidth consumed.
+        "background_bandwidth_mb",
+        # Condition F (concurrent migration) — #migrations fired in this wave.
+        "concurrency_level",
+        # Condition G (failure injection).
+        "fault_injected",           # 1 if destination was killed mid-migration
+        "retry_count",              # #relaunch attempts before success
+        "total_recovery_ms",        # trigger -> productive again, incl. retries
+    ]
+
+    def __init__(self, condition: str, results_dir: str) -> None:
+        self.condition = condition
+        self.path = os.path.join(results_dir, "migration_events.csv")
+        self._lock = threading.Lock()
+        self._n = 0
+        os.makedirs(results_dir, exist_ok=True)
+        if not os.path.exists(self.path):
+            with open(self.path, "w", newline="") as f:
+                csv.DictWriter(f, fieldnames=self.FIELDNAMES).writeheader()
+
+    def write_event(self, metrics: dict) -> None:
+        with self._lock:
+            self._n += 1
+            row = {k: metrics.get(k, 0) for k in self.FIELDNAMES}
+            row["condition"] = self.condition
+            row["migration_event_id"] = self._n
+            row["timestamp"] = time.time()
+            with open(self.path, "a", newline="") as f:
+                csv.DictWriter(f, fieldnames=self.FIELDNAMES).writerow(row)
+
+    @property
+    def event_count(self) -> int:
+        return self._n
+
+
+# --------------------------------------------------------------------------- #
+# Post-migration success-rate probe (reads task_logs from Redis).             #
+# --------------------------------------------------------------------------- #
+
+def post_migration_success_rate(r, robot_id: str, baseline_count: int,
+                                 *, n: int = 10, timeout_s: float = 120.0) -> float:
+    deadline = time.time() + timeout_s
+    seen = set()
+    new_tasks = []
+    while time.time() < deadline and len(new_tasks) < n:
+        for raw in r.lrange("task_logs", 0, 600):
+            try:
+                e = json.loads(raw)
+            except Exception:
+                continue
+            if e.get("robot_id") != robot_id:
+                continue
+            tc = e.get("task_counter", 0)
+            if tc > baseline_count and tc not in seen:
+                seen.add(tc); new_tasks.append(e)
+        time.sleep(0.5)
+    if not new_tasks:
+        return 0.0
+    return sum(1 for t in new_tasks[:n] if t.get("status") == "success") / min(n, len(new_tasks))
+
+
+def post_migration_recovery(r, robot_id: str, baseline_count: int,
+                            success_rate_pre: float, *,
+                            n_sr: int = 10, max_wait_s: float = 30.0,
+                            timeout_s: float = 45.0) -> dict:
+    """Single-pass post-migration probe with EARLY EXIT so it doesn't block the
+    migration monitor for the full window. Returns:
+
+      success_rate_post     — success fraction of the first n_sr post-migration tasks
+      throughput_post_60s   — tasks/min, extrapolated from the observed rate
+                              (rate over the window x 60), valid even on early exit
+      recovery_tasks_to_pre — #post-migration tasks until rolling-10 success rate
+                              recovers to >= success_rate_pre (-1 if not recovered)
+
+    Exit conditions (whichever first):
+      - we have >= n_sr tasks AND recovery has been detected (the common case
+        for a preserved policy: a handful of tasks, ~seconds), or
+      - max_wait_s elapsed since the first post-migration task, or
+      - timeout_s elapsed overall (no tasks showed up at all).
+
+    Reads task_logs from Redis, timestamping each new task on arrival. This
+    replaces the old fixed-60s wait that serialized the monitor at ~60s/event."""
+    deadline = time.time() + timeout_s
+    seen = set()
+    new_tasks = []           # (arrival_wall, task_dict)
+    first_arrival = None
+    while time.time() < deadline:
+        for raw in r.lrange("task_logs", 0, 1500):
+            try:
+                e = json.loads(raw)
+            except Exception:
+                continue
+            if e.get("robot_id") != robot_id:
+                continue
+            tc = e.get("task_counter", 0)
+            if tc > baseline_count and tc not in seen:
+                seen.add(tc)
+                arr = time.time()
+                if first_arrival is None:
+                    first_arrival = arr
+                new_tasks.append((arr, e))
+
+        if first_arrival is not None:
+            ordered = sorted(new_tasks, key=lambda x: x[1].get("task_counter", 0))
+            recovered = any(
+                float(e.get("success_rate_rolling10", 0)) >= success_rate_pre
+                for _, e in ordered
+            )
+            elapsed = time.time() - first_arrival
+            # Early exit: enough for sr_post AND we've seen recovery. Or the
+            # per-event wait cap is hit (recovery genuinely slow — itself data).
+            if (len(ordered) >= n_sr and recovered) or elapsed >= max_wait_s:
+                break
+        time.sleep(0.3)
+
+    if not new_tasks:
+        return {"success_rate_post": 0.0,
+                "throughput_post_60s": 0,
+                "recovery_tasks_to_pre": -1}
+
+    new_tasks.sort(key=lambda x: x[1].get("task_counter", 0))
+
+    first_n = [e for _, e in new_tasks[:n_sr]]
+    sr_post = (sum(1 for e in first_n if e.get("status") == "success")
+               / max(len(first_n), 1))
+
+    # Throughput as a rate extrapolated to per-minute, so an early exit (a few
+    # tasks in a few seconds) still yields a meaningful number.
+    last_arrival = new_tasks[-1][0]
+    span = max(last_arrival - first_arrival, 1e-3)
+    tput_per_min = round(len(new_tasks) / span * 60.0, 1) if len(new_tasks) > 1 else 0
+
+    recovery = -1
+    for i, (_, e) in enumerate(new_tasks, start=1):
+        if float(e.get("success_rate_rolling10", 0)) >= success_rate_pre:
+            recovery = i
+            break
+
+    return {"success_rate_post": round(sr_post, 4),
+            "throughput_post_60s": tput_per_min,
+            "recovery_tasks_to_pre": recovery}
+
+
+# --------------------------------------------------------------------------- #
+# Live status thread — same shape as workstation, prints every interval s.    #
+# --------------------------------------------------------------------------- #
+
+def live_status_loop(cfg: ClusterConfig, r, writer: MigrationMetricsWriter,
+                     interval: int = 15) -> None:
+    LOG.info("[Status] live status thread started (every %ds)", interval)
+    time.sleep(interval)
+    while True:
+        try:
+            latest: dict = {}
+            for raw in r.lrange("task_logs", 0, 1500):
+                try:
+                    e = json.loads(raw)
+                except Exception:
+                    continue
+                rid = e.get("robot_id")
+                if rid and rid not in latest:
+                    latest[rid] = e
+                if len(latest) >= cfg.num_clients:
+                    break
+            rows = []
+            for cid in range(cfg.num_clients):
+                rid = f"robot_{cid:03d}"
+                e = latest.get(rid)
+                if not e:
+                    rows.append(f"  {rid}: <no tasks yet>")
+                    continue
+                rows.append(
+                    f"  {rid}: tasks={e.get('task_counter',0):>4}  "
+                    f"fl_round={e.get('fl_round',0):>2}  "
+                    f"success10={e.get('success_rate_rolling10',0):.2f}  "
+                    f"reward={e.get('reward',0):+.2f}  "
+                    f"step={e.get('training_step',0)}"
+                )
+            pending = r.keys("migration_request:robot_*")
+            extra = f" migrations_done={writer.event_count}"
+            if pending:
+                extra += f" pending={len(pending)}"
+            LOG.info("=" * 78)
+            LOG.info("[Status] live snapshot%s", extra)
+            for line in rows:
+                LOG.info(line)
+            LOG.info("=" * 78)
+        except Exception as e:
+            LOG.error("[Status] %r", e)
+        time.sleep(interval)
+
+
+# NOTE: CRIU helpers (remote_criu_dump, remote_criu_restore,
+# simulate_dump_seconds) and get_robot_pid were removed. CRIU is unavailable
+# on this cluster; Conditions C/D now use application-level torch.save/load
+# (see cluster/workers/worker_app_checkpoint.py) and don't need the host PID.

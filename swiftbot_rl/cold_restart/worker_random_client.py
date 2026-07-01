@@ -21,10 +21,11 @@ signal.signal(signal.SIGINT, signal_handler)
 sys.path.insert(0, "/app/robot")
 from task_generator import SyntheticTaskGenerator
 
-TOTAL_TASKS = 1000
+TOTAL_TASKS         = int(os.environ.get("TOTAL_TASKS", "1000"))
 _MIGRATION_SCHEDULE = [200, 400, 600, 800, 950]
+_MIGRATION_OFFSET   = int(os.environ.get("MIGRATION_OFFSET", "25"))
 def forced_migration_tasks_for(client_id: int) -> set:
-    offset = client_id * 25
+    offset = client_id * _MIGRATION_OFFSET
     return {t + offset for t in _MIGRATION_SCHEDULE}
 
 

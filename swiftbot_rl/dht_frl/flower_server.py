@@ -1,7 +1,7 @@
 """
 Flower server for DHT+FRL condition.
 Runs FedAvg only (no FedProx, no FedAdam).
-Aggregates BidPolicyMLP weights from 8 robot containers.
+Aggregates BidPolicyMLP weights from 32 robot containers.
 Based on server_asr_optimized.py structure — same pattern, different model.
 """
 import os
@@ -37,9 +37,9 @@ logger = logging.getLogger(__name__)
 logging.getLogger("flwr").setLevel(logging.WARNING)
 
 # --- CONFIG ---
-N_CLIENTS       = 8
-N_ROUNDS        = 50     # 50 × 20 = 1000 tasks per worker, matches baseline TOTAL_TASKS
-SERVER_ADDRESS  = "0.0.0.0:8080"
+N_CLIENTS       = int(os.environ.get("N_CLIENTS", "32"))
+N_ROUNDS        = int(os.environ.get("N_ROUNDS", "50"))     # 50×20 = 1000 tasks default; cluster uses 60×20 = 1200
+SERVER_ADDRESS  = os.environ.get("FLOWER_BIND", "0.0.0.0:8080")
 RESULT_DIR      = os.path.join(os.path.dirname(__file__), "results")
 STATE_DIM       = 15
 

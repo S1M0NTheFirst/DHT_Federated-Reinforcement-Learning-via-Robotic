@@ -1,0 +1,12 @@
+HPC User.pdf
+run_fldht.sh
+
+# Pre-trained starting policy — regenerate with cluster/common/pretrain_ppo.py
+cluster/common/pretrained_policy.pt
+
+# Run logs — copied back from the cluster, not source
+cluster/logs/
+cluster/_archive/old_design_logs/
+
+# Paper drafts — not tracked in this repo
+paper/

@@ -15,7 +15,7 @@ Step 2 — Build Docker images
   docker build -f dht_frl/Dockerfile -t swiftbot-robot:latest dht_frl/
 
   sudo -E env "PATH=$CONDA_PREFIX/bin:$PATH" SIMULATE_CRIU=1 python3 dht_frl/dht_frl_runner.py
-
+  python swiftbot_rl/dht_frl/flower_server.py
 
     " This is a known limitation of the CRIU cuda plugin: it can't lock the CUDA context when the target process is in certain states (most often, when other CUDA processes on
   the same GPU are competing for it, or the target hasn't reached an idle CUDA state). The plugin's path is brittle on consumer GPUs."

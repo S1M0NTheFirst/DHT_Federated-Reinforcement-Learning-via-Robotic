@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 # --- CONFIG ---
 DOCKER_IMAGE_NAME    = "swiftbot-robot:latest"
-NUM_NODES            = 4
+NUM_NODES            = 16
 CLIENTS_PER_NODE     = 2
-TOTAL_CLIENTS        = NUM_NODES * CLIENTS_PER_NODE   # = 8
+TOTAL_CLIENTS        = NUM_NODES * CLIENTS_PER_NODE   # = 32
 BASE_PORT            = 8470
 CHECKPOINT_BASE      = "/tmp/swiftbot_checkpoints"
 RESULT_DIR           = os.path.join(os.path.dirname(__file__), "results")
@@ -41,7 +41,7 @@ def _get_post_migration_success_rate(robot_id: str, baseline_count: int,
     new_tasks = []
     seen: set = set()
     while time.time() < deadline and len(new_tasks) < n:
-        for raw in r_client.lrange("task_logs", 0, 300):
+        for raw in r_client.lrange("task_logs", 0, 600):
             try:
                 entry = json.loads(raw)
             except Exception:
@@ -90,7 +90,7 @@ class DHTNode:
         for i in range(CLIENTS_PER_NODE):
             cid   = self.node_id * CLIENTS_PER_NODE + i
             cname = f"swiftbot-robot-{cid}"
-            ctype = "gpu_specialist" if cid < 4 else "cpu_specialist"
+            ctype = "gpu_specialist" if cid < 16 else "cpu_specialist"
 
             try:
                 try:
@@ -444,7 +444,7 @@ def live_status_thread(interval: int = 15):
             rows = []
             # Read most recent task_log per robot
             latest: dict = {}
-            for raw in r_client.lrange("task_logs", 0, 500):
+            for raw in r_client.lrange("task_logs", 0, 1000):
                 try:
                     e = json.loads(raw)
                 except Exception:

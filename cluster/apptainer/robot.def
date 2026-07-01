@@ -1,0 +1,40 @@
+Bootstrap: docker
+From: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+# Image for Condition A (DHT+FRL). Includes flower, kademlia, stable-baselines3.
+# Built once per cluster account via cluster/apptainer/build_images.sh.
+# Worker code is bind-mounted at runtime into /app, so this image rarely
+# needs rebuilding when only Python sources change.
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update && apt-get install -y \
+        python3.10 python3-pip \
+        criu \
+        git wget curl iproute2 net-tools rsync openssh-client \
+        && rm -rf /var/lib/apt/lists/*
+
+    pip3 install --no-cache-dir --upgrade pip setuptools wheel
+
+    pip3 install --no-cache-dir torch==2.1.0 \
+        --index-url https://download.pytorch.org/whl/cu118
+
+    pip3 install --no-cache-dir \
+        flwr==1.5.0 \
+        kademlia==2.2.3 \
+        stable-baselines3==2.2.1 \
+        gymnasium==0.29.1 \
+        psutil==5.9.8 pynvml==11.5.0 redis==5.0.1 \
+        numpy==1.24.4 pandas==2.0.3 matplotlib==3.7.2
+
+    mkdir -p /app /checkpoints
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export TF_CPP_MIN_LOG_LEVEL=3
+    export GRPC_VERBOSITY=ERROR
+    export OMP_NUM_THREADS=4
+    export MKL_NUM_THREADS=4
+
+%runscript
+    exec python3 "$@"

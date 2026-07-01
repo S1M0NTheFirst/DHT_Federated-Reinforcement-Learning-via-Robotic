@@ -19,13 +19,14 @@ signal.signal(signal.SIGINT, signal_handler)
 sys.path.insert(0, "/app/robot")
 from task_generator import SyntheticTaskGenerator
 
-TOTAL_TASKS           = 1000
-# Match Condition A's schedule (worker_robot_client.py) for fair comparison:
-# 5 forced migrations per robot, staggered by client_id*25 so the 8 robots
-# don't stampede the migration_monitor at the same task counter.
+TOTAL_TASKS         = int(os.environ.get("TOTAL_TASKS", "1000"))
+# 5 forced migrations per robot, staggered by client_id*MIGRATION_OFFSET
+# so robots don't stampede the migration_monitor at the same task counter.
+# Workstation default = 25 (for 8 robots); cluster overrides to 10 (20 robots).
 _MIGRATION_SCHEDULE = [200, 400, 600, 800, 950]
+_MIGRATION_OFFSET   = int(os.environ.get("MIGRATION_OFFSET", "25"))
 def forced_migration_tasks_for(client_id: int) -> set:
-    offset = client_id * 25
+    offset = client_id * _MIGRATION_OFFSET
     return {t + offset for t in _MIGRATION_SCHEDULE}
 
 
