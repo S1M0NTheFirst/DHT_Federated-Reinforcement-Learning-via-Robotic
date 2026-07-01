@@ -105,21 +105,34 @@ DATA = {tag: load(d) for tag, _, d, *_ in CONDS}
 # Fig 1 — migration-time CDF (tail / predictability)                           #
 # --------------------------------------------------------------------------- #
 def fig1():
-    fig, ax = plt.subplots(figsize=(COL_WIDTH, 2.4))
-    for tag, label, _, color, _, ls, _ in CONDS:
-        vals = sorted(col(DATA[tag], "total_MTT_ms", cap=60000))
-        if not vals:
-            continue
-        y = np.arange(1, len(vals) + 1) / len(vals)
-        ax.plot(np.array(vals) / 1000.0, y, label=label,
-                color=color, linestyle=ls, linewidth=1.4)
-    ax.set_xscale("log")
-    ax.set_xlim(1.5, 60)
-    ax.set_ylim(0, 1.005)
-    ax.set_xlabel("Migration time (s, log scale)")
-    ax.set_ylabel("CDF")
-    ax.legend(loc="lower right", frameon=True, fancybox=False, edgecolor="0.4")
-    save(fig, "fig1_mtt_cdf")
+    # Arial + larger fonts for this figure only; drop the Cold-restart condition.
+    fig1_rc = {
+        "font.family":     "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "font.size":       12,
+        "axes.labelsize":  12,
+        "axes.titlesize":  12.5,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 10.5,
+    }
+    conds = [c for c in CONDS if c[0] != "E"]
+    with plt.rc_context(fig1_rc):
+        fig, ax = plt.subplots(figsize=(COL_WIDTH, 2.4))
+        for tag, label, _, color, _, ls, _ in conds:
+            vals = sorted(col(DATA[tag], "total_MTT_ms", cap=60000))
+            if not vals:
+                continue
+            y = np.arange(1, len(vals) + 1) / len(vals)
+            ax.plot(np.array(vals) / 1000.0, y, label=label,
+                    color=color, linestyle=ls, linewidth=1.4)
+        ax.set_xscale("log")
+        ax.set_xlim(1.5, 60)
+        ax.set_ylim(0, 1.005)
+        ax.set_xlabel("Migration time (s, log scale)")
+        ax.set_ylabel("CDF")
+        ax.legend(loc="lower right", frameon=True, fancybox=False, edgecolor="0.4")
+        save(fig, "fig1_mtt_cdf")
 
 
 # --------------------------------------------------------------------------- #
