@@ -212,6 +212,8 @@ def fig4():
     # Only migration mechanisms; drop condition E (cold restart).
     conds = [c for c in CONDS if c[0] != "E"]
     budgets_s = [5, 10, 30]
+    # Match the fig2_v2 (Vega/Tableau) palette used elsewhere in the paper.
+    slo_colors = {"A": "#4c78a8", "C": "#e45756", "D": "#72b7b2"}
     fig, ax = plt.subplots(figsize=(COL_WIDTH, 2.3))
 
     n_cond = len(conds)
@@ -219,7 +221,8 @@ def fig4():
     bar_w  = 0.78 / n_cond
     x_base = np.arange(n_bud)
 
-    for i, (tag, label, _, color, _, _, hatch) in enumerate(conds):
+    for i, (tag, label, _, _default_color, _, _, hatch) in enumerate(conds):
+        color = slo_colors.get(tag, _default_color)
         vals = col(DATA[tag], "total_MTT_ms")
         if not vals:
             continue
