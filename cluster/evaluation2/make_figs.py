@@ -209,15 +209,17 @@ def fig3():
 # Fig 4 — SLO compliance: % of migrations within {5, 10, 30} s budgets         #
 # --------------------------------------------------------------------------- #
 def fig4():
+    # Only migration mechanisms; drop condition E (cold restart).
+    conds = [c for c in CONDS if c[0] != "E"]
     budgets_s = [5, 10, 30]
     fig, ax = plt.subplots(figsize=(COL_WIDTH, 2.3))
 
-    n_cond = len(CONDS)
+    n_cond = len(conds)
     n_bud  = len(budgets_s)
     bar_w  = 0.78 / n_cond
     x_base = np.arange(n_bud)
 
-    for i, (tag, label, _, color, _, _, hatch) in enumerate(CONDS):
+    for i, (tag, label, _, color, _, _, hatch) in enumerate(conds):
         vals = col(DATA[tag], "total_MTT_ms")
         if not vals:
             continue
