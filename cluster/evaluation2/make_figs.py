@@ -214,6 +214,24 @@ def fig4():
     budgets_s = [5, 10, 30]
     # Match the fig2_v2 (Vega/Tableau) palette used elsewhere in the paper.
     slo_colors = {"A": "#4c78a8", "C": "#e45756", "D": "#72b7b2"}
+    # Arial + larger fonts to match fig2b_stacked_budget.
+    fig4_rc = {
+        "font.family":     "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "font.size":       12,
+        "axes.labelsize":  12,
+        "axes.titlesize":  12.5,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        # Keep the legend at the original compact size so it tucks into the
+        # bottom-right corner instead of overlapping the bars.
+        "legend.fontsize": 7.5,
+    }
+    with plt.rc_context(fig4_rc):
+        _fig4_body(conds, budgets_s, slo_colors)
+
+
+def _fig4_body(conds, budgets_s, slo_colors):
     fig, ax = plt.subplots(figsize=(COL_WIDTH, 2.3))
 
     n_cond = len(conds)
@@ -237,7 +255,7 @@ def fig4():
     ax.set_xticks(x_base)
     ax.set_xticklabels([f"{b} s" for b in budgets_s])
     ax.set_xlabel("Migration-time budget (SLO)")
-    ax.set_ylabel("Migrations meeting budget (%)")
+    ax.set_ylabel("Meeting budget (%)")
     ax.set_ylim(0, 108)
     ax.legend(loc="lower right", ncol=2, frameon=True,
               fancybox=False, edgecolor="0.4")
