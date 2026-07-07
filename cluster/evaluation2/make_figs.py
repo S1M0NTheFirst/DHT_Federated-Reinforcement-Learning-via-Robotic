@@ -218,14 +218,14 @@ def fig4():
     fig4_rc = {
         "font.family":     "sans-serif",
         "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-        "font.size":       12,
-        "axes.labelsize":  12,
-        "axes.titlesize":  12.5,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
+        "font.size":       10,
+        "axes.labelsize":  10,
+        "axes.titlesize":  10.5,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
         # Keep the legend at the original compact size so it tucks into the
         # bottom-right corner instead of overlapping the bars.
-        "legend.fontsize": 7.5,
+        "legend.fontsize": 6.5,
     }
     with plt.rc_context(fig4_rc):
         _fig4_body(conds, budgets_s, slo_colors)
@@ -254,6 +254,7 @@ def _fig4_body(conds, budgets_s, slo_colors):
 
     ax.set_xticks(x_base)
     ax.set_xticklabels([f"{b} s" for b in budgets_s])
+    ax.tick_params(axis="x", labelsize=10)
     ax.set_xlabel("Migration-time budget (SLO)")
     ax.set_ylabel("Meeting budget (%)")
     ax.set_ylim(0, 108)
