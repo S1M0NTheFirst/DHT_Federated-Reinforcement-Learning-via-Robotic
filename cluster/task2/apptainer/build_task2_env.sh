@@ -30,8 +30,13 @@ if [[ -f "$SENTINEL" ]]; then
     echo ">>> $PYLIBS2 already populated (sentinel present); skipping."
 else
     echo ">>> Installing MuJoCo layer into $PYLIBS2 (via container python)"
+    # IMPORTANT: pin numpy<2. Left unpinned, mujoco/gymnasium pull NumPy 2.x into
+    # pylibs2, which (being first on PYTHONPATH) shadows task1's numpy 1.24.4 and
+    # breaks Flower 1.5.0 (`np.float_` was removed in NumPy 2.0). numpy 1.26.4 is
+    # compatible with mujoco 3.1.6, gymnasium 0.29.1, torch, AND flwr 1.5.0.
     apptainer exec --bind "$PYLIBS2":/pylibs2 "$SIF" \
         python3 -m pip install --no-cache-dir --target=/pylibs2 --upgrade \
+            "numpy==1.26.4" \
             "mujoco==3.1.6" \
             "gymnasium[mujoco]==0.29.1"
     touch "$SENTINEL"
@@ -45,12 +50,15 @@ apptainer exec \
     --bind "$PYLIBS2":/pylibs2 \
     --env PYTHONPATH=/pylibs2:/pylibs \
     "$SIF" python3 - <<'PY'
+import numpy as np
 import gymnasium as gym
+import flwr  # must import cleanly — flwr 1.5 breaks on numpy>=2
+assert np.__version__.startswith("1."), f"numpy must be <2, got {np.__version__}"
 e = gym.make("Hopper-v4")
 o, _ = e.reset(seed=0)
 for _ in range(5):
     o, r, term, trunc, _ = e.step(e.action_space.sample())
-print("Hopper-v4 OK  obs_dim=%d act_dim=%d  sample_reward=%.3f"
-      % (e.observation_space.shape[0], e.action_space.shape[0], r))
+print("Hopper-v4 OK  obs_dim=%d act_dim=%d  sample_reward=%.3f  numpy=%s  flwr OK"
+      % (e.observation_space.shape[0], e.action_space.shape[0], r, np.__version__))
 PY
 echo ">>> If you saw 'Hopper-v4 OK', the online-RL dependency is satisfied."
