@@ -214,36 +214,49 @@ def fig4():
     budgets_s = [5, 10, 30]
     # Match the fig2_v2 (Vega/Tableau) palette used elsewhere in the paper.
     slo_colors = {"A": "#4c78a8", "C": "#e45756", "D": "#72b7b2"}
-    fig, ax = plt.subplots(figsize=(COL_WIDTH, 2.3))
 
-    n_cond = len(conds)
-    n_bud  = len(budgets_s)
-    bar_w  = 0.78 / n_cond
-    x_base = np.arange(n_bud)
+    # Arial + larger fonts for this figure only.
+    fig4_rc = {
+        "font.family":     "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "font.size":       12,
+        "axes.labelsize":  12,
+        "axes.titlesize":  12.5,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 10.5,
+    }
+    with plt.rc_context(fig4_rc):
+        fig, ax = plt.subplots(figsize=(COL_WIDTH, 2.3))
 
-    for i, (tag, label, _, _default_color, _, _, hatch) in enumerate(conds):
-        color = slo_colors.get(tag, _default_color)
-        vals = col(DATA[tag], "total_MTT_ms")
-        if not vals:
-            continue
-        v = np.array(vals)
-        pcts = [100.0 * np.mean(v <= b * 1000.0) for b in budgets_s]
-        x = x_base + (i - (n_cond - 1) / 2.0) * bar_w
-        bars = ax.bar(x, pcts, bar_w, color=color, edgecolor="black",
-                      linewidth=0.5, label=label)
-        for bar in bars:
-            bar.set_hatch(hatch)
+        n_cond = len(conds)
+        n_bud  = len(budgets_s)
+        bar_w  = 0.78 / n_cond
+        x_base = np.arange(n_bud)
 
-    ax.set_xticks(x_base)
-    ax.set_xticklabels([f"{b} s" for b in budgets_s])
-    ax.set_xlabel("Migration-time budget (SLO)")
-    ax.set_ylabel("Migrations meeting budget (%)")
-    ax.set_ylim(0, 108)
-    ax.legend(loc="lower right", ncol=2, frameon=True,
-              fancybox=False, edgecolor="0.4")
-    ax.grid(axis="y", linestyle=":", alpha=0.6)
-    ax.grid(axis="x", visible=False)
-    save(fig, "fig4_slo_compliance")
+        for i, (tag, label, _, _default_color, _, _, hatch) in enumerate(conds):
+            color = slo_colors.get(tag, _default_color)
+            vals = col(DATA[tag], "total_MTT_ms")
+            if not vals:
+                continue
+            v = np.array(vals)
+            pcts = [100.0 * np.mean(v <= b * 1000.0) for b in budgets_s]
+            x = x_base + (i - (n_cond - 1) / 2.0) * bar_w
+            bars = ax.bar(x, pcts, bar_w, color=color, edgecolor="black",
+                          linewidth=0.5, label=label)
+            for bar in bars:
+                bar.set_hatch(hatch)
+
+        ax.set_xticks(x_base)
+        ax.set_xticklabels([f"{b} s" for b in budgets_s])
+        ax.set_xlabel("Migration-time budget (SLO)")
+        ax.set_ylabel("Migrations meeting budget (%)")
+        ax.set_ylim(0, 108)
+        ax.legend(loc="lower right", ncol=2, frameon=True,
+                  fancybox=False, edgecolor="0.4")
+        ax.grid(axis="y", linestyle=":", alpha=0.6)
+        ax.grid(axis="x", visible=False)
+        save(fig, "fig4_slo_compliance")
 
 
 # --------------------------------------------------------------------------- #
