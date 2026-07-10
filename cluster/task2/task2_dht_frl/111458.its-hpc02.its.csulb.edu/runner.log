@@ -1,0 +1,57 @@
+>>> Logs: /home/029822154/cluster/logs/task2_dht_frl/111458.its-hpc02.its.csulb.edu
+>>> Tail in real time:
+       tail -F /home/029822154/cluster/logs/task2_dht_frl/111458.its-hpc02.its.csulb.edu/server.log
+       tail -F /home/029822154/cluster/logs/task2_dht_frl/111458.its-hpc02.its.csulb.edu/client_node1.log /home/029822154/cluster/logs/task2_dht_frl/111458.its-hpc02.its.csulb.edu/client_node2.log
+       tail -F /home/029822154/cluster/logs/task2_dht_frl/111458.its-hpc02.its.csulb.edu/robot_*.log
+>>> PBS_NODEFILE=/var/spool/torque/aux//111458.its-hpc02.its.csulb.edu
+>>> raw PBS_NODEFILE contents:
+    n005.cluster.pssclabs.com
+    n005.cluster.pssclabs.com
+    n005.cluster.pssclabs.com
+    n005.cluster.pssclabs.com
+    n005.cluster.pssclabs.com
+    n005.cluster.pssclabs.com
+    n005.cluster.pssclabs.com
+    n005.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n016.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+    n027.cluster.pssclabs.com
+>>> self hostname: n005.cluster.pssclabs.com (short: n005)
+Testing SSH on assigned nodes: n005.cluster.pssclabs.com n016.cluster.pssclabs.com n027.cluster.pssclabs.com
+  n005.cluster.pssclabs.com LOCAL (self) — included
+  n016.cluster.pssclabs.com ALIVE
+  n027.cluster.pssclabs.com ALIVE
+Server:    n005.cluster.pssclabs.com
+Client #1: n016.cluster.pssclabs.com
+Client #2: n027.cluster.pssclabs.com
+>>> Starting Redis on n005.cluster.pssclabs.com:6579 (local=yes)
+>>> Redis local PID=2169460 (bin=/home/029822154/miniconda3/bin/redis-server)
+>>> Redis ready (via redis-cli)
+>>> Launching task2 dht_frl runner
+Traceback (most recent call last):
+  File "/home/029822154/cluster/task2/condition_dht_frl/runner.py", line 14, in <module>
+    from common.runner_base import (  # noqa: E402
+        run_task2, current_node, read_probe_metrics,
+    )
+ModuleNotFoundError: No module named 'common.runner_base'
+>>> runner exited rc=1
+>>> Cleanup: tearing down all SSH children + remote processes
+>>> Post-cleanup verification:
+  n005.cluster.pssclabs.com: clean
+  n016.cluster.pssclabs.com: clean
+  n027.cluster.pssclabs.com: clean
+>>> Cleanup complete
+>>> Bash wrapper exiting.

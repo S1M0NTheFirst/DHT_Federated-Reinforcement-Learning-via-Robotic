@@ -89,17 +89,35 @@ pick_alive_nodes() {
                 | tee -a "$RUNNER_LOG"
         fi
     done
-    if [[ ${#ALIVE_NODES[@]} -lt 3 ]]; then
-        echo "FATAL: need ≥3 alive nodes (1 server + 2 clients), got ${#ALIVE_NODES[@]}" \
+    # MIN_ALIVE_NODES (default 3) lets a condition run on a 2-node footprint.
+    # task1 leaves it unset -> 3-node layout (dedicated server), unchanged.
+    # task2 non-DHT conditions set it to 2 to save nodes.
+    local min_nodes="${MIN_ALIVE_NODES:-3}"
+    if [[ ${#ALIVE_NODES[@]} -lt $min_nodes ]]; then
+        echo "FATAL: need ≥$min_nodes alive nodes, got ${#ALIVE_NODES[@]}" \
             | tee -a "$RUNNER_LOG"
         return 1
     fi
-    export SERVER_NODE="${ALIVE_NODES[0]}"
-    export CLIENT_NODE_1="${ALIVE_NODES[1]}"
-    export CLIENT_NODE_2="${ALIVE_NODES[2]}"
-    echo "Server:    $SERVER_NODE" | tee -a "$RUNNER_LOG"
-    echo "Client #1: $CLIENT_NODE_1" | tee -a "$RUNNER_LOG"
-    echo "Client #2: $CLIENT_NODE_2" | tee -a "$RUNNER_LOG"
+    if [[ "$min_nodes" -le 2 ]]; then
+        # 2-node mode: co-locate the server (Redis + Flower + runner) on the
+        # FIRST client node. Two physical nodes still give cross-node migration
+        # (robots 0..9 live on node0 alongside the server, robots 10..19 on
+        # node1). The runner runs on SERVER_NODE == CLIENT_NODE_1, so its local
+        # robots launch without SSH (is_local_node), exactly like task1's
+        # server-node robots.
+        export SERVER_NODE="${ALIVE_NODES[0]}"
+        export CLIENT_NODE_1="${ALIVE_NODES[0]}"
+        export CLIENT_NODE_2="${ALIVE_NODES[1]}"
+        echo "Server+Client#1 (co-located): $SERVER_NODE" | tee -a "$RUNNER_LOG"
+        echo "Client #2:                    $CLIENT_NODE_2" | tee -a "$RUNNER_LOG"
+    else
+        export SERVER_NODE="${ALIVE_NODES[0]}"
+        export CLIENT_NODE_1="${ALIVE_NODES[1]}"
+        export CLIENT_NODE_2="${ALIVE_NODES[2]}"
+        echo "Server:    $SERVER_NODE" | tee -a "$RUNNER_LOG"
+        echo "Client #1: $CLIENT_NODE_1" | tee -a "$RUNNER_LOG"
+        echo "Client #2: $CLIENT_NODE_2" | tee -a "$RUNNER_LOG"
+    fi
 }
 
 # Start Redis on the server node as a TRACKED bash background SSH process.

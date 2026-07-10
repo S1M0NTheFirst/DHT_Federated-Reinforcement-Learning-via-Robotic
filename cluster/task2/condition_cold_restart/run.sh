@@ -15,6 +15,11 @@ source "$CLUSTER_ROOT/common/cluster_config.sh"
 source "$CLUSTER_ROOT/common/cluster_lib.sh"
 source "$CLUSTER_ROOT/task2/common/task2_config.sh"
 
+# Non-DHT conditions use a 2-node footprint: server co-located on client node 1
+# (robots 0..9 + server on node0, robots 10..19 on node1). Still cross-node
+# migration, one fewer node than DHT.
+export MIN_ALIVE_NODES=2
+
 setup_run_dirs "task2_cold_restart"
 cleanup_and_exit() { cleanup_all_nodes; exit "${1:-0}"; }
 trap 'cleanup_and_exit 130' INT

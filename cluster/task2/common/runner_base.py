@@ -180,7 +180,13 @@ def launch_task2_flower(cfg: ClusterConfig) -> subprocess.Popen:
     pylibs2 = os.environ["TASK2_PYLIBS2"]
     conda_base = os.environ.get("CONDA_BASE")
     conda_env = os.environ.get("CONDA_ENV", "base")
-    fl_result_container = f"/cluster_app/results/{os.path.basename(cfg.results_dir.rstrip('/'))}"
+    # Map the host results dir (under task2/results) to its container path.
+    # cluster_root is bound at /cluster_app, so a results dir anywhere under it
+    # (e.g. .../cluster/task2/results/task2_dht_frl) maps to
+    # /cluster_app/task2/results/task2_dht_frl — keeps fl_*.csv + task_logs.csv
+    # inside the task2 folder instead of cluster/results.
+    rel = os.path.relpath(cfg.results_dir, cluster_root)
+    fl_result_container = f"/cluster_app/{rel}".replace(os.sep, "/")
     env = {
         "N_CLIENTS": cfg.num_clients, "N_ROUNDS": cfg.total_fl_rounds,
         "FLOWER_BIND": f"0.0.0.0:{cfg.flower_port}",

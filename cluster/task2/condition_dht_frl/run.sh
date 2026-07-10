@@ -16,6 +16,9 @@ source "$CLUSTER_ROOT/common/cluster_config.sh"
 source "$CLUSTER_ROOT/common/cluster_lib.sh"
 source "$CLUSTER_ROOT/task2/common/task2_config.sh"
 
+# DHT uses the full 3-node layout (dedicated server + 2 client nodes).
+export MIN_ALIVE_NODES=3
+
 setup_run_dirs "task2_dht_frl"
 cleanup_and_exit() { cleanup_all_nodes; exit "${1:-0}"; }
 trap 'cleanup_and_exit 130' INT

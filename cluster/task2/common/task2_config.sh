@@ -7,6 +7,12 @@
 export TASK2_ROOT="${CLUSTER_ROOT}/task2"
 export TASK2_PYLIBS2="${TASK2_ROOT}/apptainer/pylibs2"   # mujoco layer (bind alongside pylibs)
 
+# Keep ALL task2 logs + results INSIDE the task2 folder (not cluster/logs,
+# cluster/results). Overrides cluster_config.sh; must be set before
+# setup_run_dirs runs in run.sh.
+export LOG_ROOT="${TASK2_ROOT}/logs"
+export RESULTS_ROOT="${TASK2_ROOT}/results"
+
 # --- online-RL knobs (env-tunable; calibrate in the smoke test first) ---
 export TOTAL_FL_ROUNDS=150            # online learning is slower than task1's 100
 export STEPS_PER_ROUND=1000           # env steps per robot per FL round

@@ -12,7 +12,9 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from common.runner_base import (  # noqa: E402
+# task2's runner_base (top-level module on task2/common); NOT cluster/common,
+# which is task1's package and has no runner_base.
+from runner_base import (  # noqa: E402
     run_task2, current_node, read_probe_metrics,
 )
 
