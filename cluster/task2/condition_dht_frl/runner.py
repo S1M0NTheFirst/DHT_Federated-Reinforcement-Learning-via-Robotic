@@ -15,7 +15,7 @@ from common.runner_base import (  # noqa: E402
     run_task2, current_node, read_probe_metrics,
 )
 from common.cluster_runner import (  # noqa: E402
-    apptainer_instance_name, rsync_dir, ssh_run, post_migration_recovery,
+    apptainer_instance_name, rsync_dir, ssh_run,
 )
 
 CONDITION = "dht_frl"
@@ -60,11 +60,14 @@ def trigger(cfg, r, robot_id, sr_pre, tc_pre):
     r.set(f"load_policy:{robot_id}", f"/checkpoints/{robot_id}", ex=600)
     r.set(f"migration_done:{robot_id}", "1", ex=600)
 
-    # 5. read the worker's post-resume probe (losslessness) + recovery.
+    # 5. read the worker's post-resume probe (behavioral losslessness).
+    #    success_rate_post / regression / recovery are NOT computed here (task1's
+    #    task-based post_migration_recovery scans task_logs by task_counter,
+    #    which the round-based task2 eval rows don't have). Continuity is
+    #    computed post-hoc in evaluation2 from task_logs.csv aligned to the
+    #    migration fl_round markers. We record the real pre-migration success
+    #    and leave post fields as sentinels.
     probe = read_probe_metrics(r, robot_id)
-    recov = post_migration_recovery(r, robot_id, tc_pre, sr_pre)
-    regression = ((sr_pre - recov["success_rate_post"]) / sr_pre * 100
-                  if sr_pre > 0 else 0.0)
     total_ms = (time.perf_counter() - t0) * 1000
 
     return {
@@ -76,13 +79,14 @@ def trigger(cfg, r, robot_id, sr_pre, tc_pre):
         "downtime_ms": transfer_ms + probe["policy_load_ms"],
         "total_MTT_ms": total_ms,
         "success_rate_pre": sr_pre,
-        "success_rate_post": recov["success_rate_post"],
-        "regression_pct": round(regression, 2),
+        "success_rate_post": -1,
+        "regression_pct": -1,
+        "fl_rounds_to_recover": -1,
         "replay_buffer_entries_restored": probe["replay_entries_post"],
         "network_bytes_transferred": bytes_xfer,
         "checkpoint_size_mb": round(chk_mb, 3),
-        "throughput_post_60s": recov["throughput_post_60s"],
-        "recovery_tasks_to_pre": recov["recovery_tasks_to_pre"],
+        "throughput_post_60s": 0,
+        "recovery_tasks_to_pre": -1,
         "policy_action_mse": probe["policy_action_mse"],
         "policy_weight_l2": probe["policy_weight_l2"],
     }

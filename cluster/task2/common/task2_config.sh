@@ -14,7 +14,9 @@ export MIN_BUFFER_FILL=1000           # gate SAC updates → wiped buffer = real
 export BUFFER_CAPACITY=100000         # meaningful local replay
 export SAC_BATCH=256
 export EVAL_EPISODES=3
-export EVAL_SUCCESS_RETURN=800        # success threshold (must not peg at 1.0)
+export EVAL_SUCCESS_RETURN=250        # success threshold; ~mid-plateau so success
+                                      # sits between 0 and 1 (smoke plateau ~300).
+                                      # Raise if the full 150-round run climbs higher.
 export TASK2_ENV="Hopper-v4"
 export SHARED_SEED=12345              # identical global-actor start for all conditions
 

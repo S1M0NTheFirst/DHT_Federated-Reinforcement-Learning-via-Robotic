@@ -62,7 +62,7 @@ UPDATES_PER_STEP  = int(os.environ.get("UPDATES_PER_STEP", "1"))
 BATCH_SIZE        = int(os.environ.get("SAC_BATCH", "256"))
 BUFFER_CAPACITY   = int(os.environ.get("BUFFER_CAPACITY", "100000"))
 EVAL_EPISODES     = int(os.environ.get("EVAL_EPISODES", "3"))
-EVAL_SUCCESS_RETURN = float(os.environ.get("EVAL_SUCCESS_RETURN", "800"))
+EVAL_SUCCESS_RETURN = float(os.environ.get("EVAL_SUCCESS_RETURN", "250"))
 TOTAL_FL_ROUNDS   = int(os.environ.get("TOTAL_FL_ROUNDS", "150"))
 # Shared start: all robots/conditions seed identical initial actor weights.
 SHARED_SEED       = int(os.environ.get("SHARED_SEED", "12345"))
@@ -99,6 +99,10 @@ class OnlineSACRobot:
         self._obs, _ = self.env.reset(seed=self.env_seed)
         self.global_step = 0
         self.total_env_steps = 0
+        # Most recent eval, so a migration mid-fit can report the real
+        # pre-migration success/return without a fresh (expensive) rollout.
+        self.last_eval_return = 0.0
+        self.last_eval_success = 0.0
 
     # ---- online interaction ----
     def collect_and_train(self, n_steps: int) -> dict:
@@ -161,6 +165,8 @@ class OnlineSACRobot:
         mean_ret = float(np.mean(rets))
         success = float(np.mean([1.0 if x >= EVAL_SUCCESS_RETURN else 0.0
                                  for x in rets]))
+        self.last_eval_return = mean_ret
+        self.last_eval_success = success
         return {"eval_return": mean_ret,
                 "eval_episode_len": float(np.mean(lens)),
                 "eval_success": success}
@@ -277,7 +283,9 @@ def _make_flower_client(robot: OnlineSACRobot, r, condition: str,
             r.set(f"ready_for_criu:{rid}", "1", ex=3600)
             r.set(f"migration_request:{rid}", json.dumps({
                 "robot_id": rid, "fl_round": fl_round,
-                "success_rate": 0.0, "task_counter": self.robot.total_env_steps,
+                "success_rate": self.robot.last_eval_success,
+                "eval_return_pre": self.robot.last_eval_return,
+                "task_counter": self.robot.total_env_steps,
                 "bundle_mb": info["bundle_mb"],
             }), ex=3600)
             logger.info(f"[{rid}] migration requested at fl_round={fl_round} "
