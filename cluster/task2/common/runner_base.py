@@ -243,6 +243,98 @@ def read_probe_metrics(r: redis.Redis, robot_id: str,
 
 
 # --------------------------------------------------------------------------- #
+# Shared state-preserving bundle-transport trigger. The 4 preserving transports #
+# (rsync cold, rsync+precopy warm, scp/tcp, dht) differ ONLY in `transport`.    #
+# transport(src, dst, src_bundle, dst_bundle) -> dict(transfer_ms, bytes,       #
+# chk_mb, background_mb). The worker stays alive and reloads its bundle in place #
+# (bundle replication, same cluster reality as task1 cond A); the transport is  #
+# measured cross-node.                                                          #
+# --------------------------------------------------------------------------- #
+def bundle_trigger(cfg, r, robot_id, sr_pre, *, transport) -> dict:
+    cid = int(robot_id.split("_")[1])
+    src = current_node(robot_id)
+    dst = cfg.other_node(src)
+    inst = apptainer_instance_name(cid)
+    src_bundle = f"{cfg.checkpoint_base}/{inst}/{robot_id}"
+    dst_bundle = f"{cfg.checkpoint_base}/{inst}_dest/{robot_id}"
+
+    t0 = time.perf_counter()
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        if r.get(f"ready_for_criu:{robot_id}"):
+            r.delete(f"ready_for_criu:{robot_id}")
+            break
+        time.sleep(0.2)
+    t_dump = time.perf_counter()
+
+    tr = transport(src, dst, src_bundle, dst_bundle)
+
+    # Worker stays on src and reloads its own /checkpoints/<robot_id>.
+    r.set(f"load_policy:{robot_id}", f"/checkpoints/{robot_id}", ex=600)
+    r.set(f"migration_done:{robot_id}", "1", ex=600)
+
+    probe = read_probe_metrics(r, robot_id)
+    total_ms = (time.perf_counter() - t0) * 1000
+    return {
+        "robot_id": robot_id, "src_node": src, "dst_node": dst,
+        "trigger_to_dump_ms": (t_dump - t0) * 1000,
+        "dump_to_transfer_ms": tr["transfer_ms"],
+        "transfer_to_restore_ms": 0,
+        "policy_load_ms": probe["policy_load_ms"],
+        "downtime_ms": tr["transfer_ms"] + probe["policy_load_ms"],
+        "total_MTT_ms": total_ms,
+        "success_rate_pre": sr_pre,
+        "success_rate_post": -1, "regression_pct": -1, "fl_rounds_to_recover": -1,
+        "replay_buffer_entries_restored": probe["replay_entries_post"],
+        "network_bytes_transferred": tr["bytes"],
+        "checkpoint_size_mb": round(tr["chk_mb"], 3),
+        "background_bandwidth_mb": round(tr.get("background_mb", 0), 3),
+        "throughput_post_60s": 0, "recovery_tasks_to_pre": -1,
+        "policy_action_mse": probe["policy_action_mse"],
+        "policy_weight_l2": probe["policy_weight_l2"],
+    }
+
+
+def _du_mb(dst, path):
+    sz = ssh_run(dst, f"du -sb {path} 2>/dev/null | awk '{{print $1}}'", timeout=10)
+    try:
+        return int((sz.stdout or "0").strip()) / (1024 * 1024)
+    except ValueError:
+        return 0.0
+
+
+def rsync_transport(src, dst, sb, db):
+    x = rsync_dir(src, sb, dst, db, timeout=600)
+    return {"transfer_ms": x["elapsed_ms"], "bytes": x["bytes_transferred"],
+            "chk_mb": _du_mb(dst, db), "background_mb": 0}
+
+
+def warm_transport(src, dst, sb, db):
+    # Background pre-copy of the bulk (NOT counted as downtime) + a final delta
+    # sync (counted). The bundle is static after the worker writes it, so the
+    # delta is ~0 → warm downtime ≈ load only, demonstrating pre-copy's benefit.
+    pre = rsync_dir(src, sb, dst, db, timeout=600)
+    t = time.perf_counter()
+    fin = rsync_dir(src, sb, dst, db, timeout=600)
+    ms = (time.perf_counter() - t) * 1000
+    return {"transfer_ms": ms, "bytes": fin["bytes_transferred"],
+            "chk_mb": _du_mb(dst, db),
+            "background_mb": pre["bytes_transferred"] / (1024 * 1024)}
+
+
+def scp_transport(src, dst, sb, db):
+    parent = os.path.dirname(db)
+    t = time.perf_counter()
+    ssh_run(dst, f"mkdir -p {parent} && rm -rf {db} && "
+                 f"scp -r -o StrictHostKeyChecking=no -o BatchMode=yes "
+                 f"{src}:{sb} {parent}/ 2>&1", timeout=600)
+    ms = (time.perf_counter() - t) * 1000
+    mb = _du_mb(dst, db)
+    return {"transfer_ms": ms, "bytes": int(mb * 1024 * 1024),
+            "chk_mb": mb, "background_mb": 0}
+
+
+# --------------------------------------------------------------------------- #
 # Orchestrator.                                                                #
 # --------------------------------------------------------------------------- #
 def run_task2(*, condition: str, checkpoint_mode: str, trigger_fn: Callable,
