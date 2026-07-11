@@ -40,3 +40,11 @@ export ROBOTS_PER_NODE=10
 # task2 ports — offset from task1 so a task2 run can coexist with a task1 run.
 export FLOWER_PORT=8570
 export REDIS_PORT=6579
+
+# --- quick-test overrides (for smoke-testing a condition at tiny scale) ---
+# Pass via msub -v, e.g. for a fast dmtcp checkpoint sanity run:
+#   ... bash tools/submit_free.sh task2/condition_dmtcp/run.sh \
+#         -v OVR_NUM_CLIENTS=2,OVR_FL_ROUNDS=8,OVR_MIGRATION_ROUNDS=3
+[ -n "${OVR_NUM_CLIENTS:-}" ]     && export NUM_CLIENTS="$OVR_NUM_CLIENTS"
+[ -n "${OVR_FL_ROUNDS:-}" ]       && export TOTAL_FL_ROUNDS="$OVR_FL_ROUNDS"
+[ -n "${OVR_MIGRATION_ROUNDS:-}" ] && export MIGRATION_ROUNDS="$OVR_MIGRATION_ROUNDS"

@@ -149,6 +149,14 @@ def launch_task2_robot(cfg: ClusterConfig, node: str, cid: int, *,
         f"SINGULARITYENV_{k}={shlex.quote(str(v))}"
         for k, v in env_pairs.items()
     )
+    worker_py = ("python3 /cluster_app/task2/worker/online_sac_worker.py "
+                 f"--client-id {cid} --container-type cpu_specialist")
+
+    # ALL conditions (incl. dmtcp) launch the worker the SAME way. DMTCP is NOT
+    # wrapped around the live worker — DMTCP jams the worker's gRPC connection to
+    # Flower (connection never completes). Instead, the dmtcp condition's trigger
+    # runs a separate short-lived DMTCP-checkpointed torch probe (no gRPC) to
+    # measure the real heavy full-process image. See condition_dmtcp/runner.py.
     remote = (
         f"mkdir -p {shlex.quote(chk)}; "
         f"source {shlex.quote(conda_base)}/bin/activate {shlex.quote(conda_env)} && "
@@ -158,8 +166,7 @@ def launch_task2_robot(cfg: ClusterConfig, node: str, cid: int, *,
         f"--bind {shlex.quote(pylibs)}:/pylibs "
         f"--bind {shlex.quote(pylibs2)}:/pylibs2 "
         f"{shlex.quote(img_dir + '/robot.sif')} "
-        f"python3 /cluster_app/task2/worker/online_sac_worker.py "
-        f"--client-id {cid} --container-type cpu_specialist"
+        f"{worker_py}"
     )
     log_fh = open(log, "ab", buffering=0)
     if is_local_node(node):
