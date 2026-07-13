@@ -73,6 +73,8 @@ class Task2MetricsWriter:
         "fault_injected", "retry_count", "total_recovery_ms",
         # --- policy-equivalence probe (behavioral losslessness) ---
         "policy_action_mse", "policy_weight_l2",
+        # --- DHT coordination overhead (dht_frl only; 0 elsewhere) ---
+        "dht_put_ms", "dht_get_ms",
     ]
 
     def __init__(self, condition: str, results_dir: str):
@@ -345,7 +347,8 @@ def scp_transport(src, dst, sb, db):
 # Orchestrator.                                                                #
 # --------------------------------------------------------------------------- #
 def run_task2(*, condition: str, checkpoint_mode: str, trigger_fn: Callable,
-              initial_extra_env: Optional[dict] = None) -> int:
+              initial_extra_env: Optional[dict] = None,
+              on_start: Optional[Callable[["ClusterConfig"], None]] = None) -> int:
     install_signal_handlers()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s",
@@ -360,6 +363,9 @@ def run_task2(*, condition: str, checkpoint_mode: str, trigger_fn: Callable,
                     decode_responses=True)
     r.flushall()
     writer = Task2MetricsWriter(condition, cfg.results_dir)
+
+    if on_start is not None:
+        on_start(cfg)
 
     flower_proc = launch_task2_flower(cfg)
     time.sleep(15)
