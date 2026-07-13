@@ -15,6 +15,7 @@ later events still preserve state via the bundle. checkpoint_mode=dmtcp.
 """
 import os
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "common"))
@@ -29,7 +30,14 @@ from common.cluster_runner import (  # noqa: E402
 CONDITION = "dmtcp"
 CHECKPOINT_MODE = "dmtcp"
 
-_measured = set()   # robots whose heavy DMTCP checkpoint we've already timed
+_measured = set()          # robots whose heavy DMTCP checkpoint we've already timed
+_measured_lock = threading.Lock()
+# The monitor now handles migrations CONCURRENTLY. Each heavy DMTCP checkpoint is
+# a ~1.9 GB image + cross-node transfer; 20 at once would exhaust disk/network.
+# Cap how many run simultaneously (the worker is already released by the bundle
+# transport before this runs, so the FL round is never blocked by the wait).
+_HEAVY_MAX = int(os.environ.get("DMTCP_HEAVY_CONCURRENCY", "2"))
+_heavy_sem = threading.Semaphore(_HEAVY_MAX)
 
 
 def _dmtcp_measure(cfg, src, dst, cid, robot_id):
@@ -114,10 +122,17 @@ def trigger(cfg, r, robot_id, sr_pre, tc_pre):
     metrics = bundle_trigger(cfg, r, robot_id, sr_pre, transport=rsync_transport)
 
     # 2. Heavy DMTCP measurement (first migration per robot only, to bound the
-    #    1.9 GB × N transfer cost). The worker is already running again by now.
-    if robot_id not in _measured:
-        _measured.add(robot_id)
-        m = _dmtcp_measure(cfg, src, dst, cid, robot_id)
+    #    1.9 GB × N transfer cost). The worker is already running again by now
+    #    (bundle_trigger released it), so this heavy step never blocks the FL
+    #    round. A semaphore caps how many run at once across the concurrent
+    #    monitor threads.
+    with _measured_lock:
+        do_measure = robot_id not in _measured
+        if do_measure:
+            _measured.add(robot_id)
+    if do_measure:
+        with _heavy_sem:
+            m = _dmtcp_measure(cfg, src, dst, cid, robot_id)
         # Overlay the heavy-checkpoint numbers onto the metrics row.
         metrics["trigger_to_dump_ms"] = round(m["dump_ms"], 2)      # DMTCP dump
         metrics["dump_to_transfer_ms"] = round(m["transfer_ms"], 2)  # heavy xfer

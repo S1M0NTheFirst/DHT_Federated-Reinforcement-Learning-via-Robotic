@@ -382,8 +382,41 @@ def run_task2(*, condition: str, checkpoint_mode: str, trigger_fn: Callable,
         time.sleep(0.5)
     LOG.info("All %d robots launched.", cfg.num_clients)
 
+    # CONCURRENT monitor. Migrations are staggered so ~4-20 robots request within
+    # the same few rounds; processing them SERIALLY (with a per-event sleep) made
+    # the migration round take ~8 min, which stalled gRPC and DROPPED clients off
+    # the Flower server (they then stopped migrating). Here each request is handled
+    # in its own thread, so a migration round completes in seconds and no client
+    # times out. Per-robot state (current_node, writer, dmtcp _measured) is already
+    # lock-guarded. Heavy per-condition work (e.g. dmtcp's 1.9 GB checkpoint) bounds
+    # its OWN concurrency inside trigger_fn; the FL round is never blocked because
+    # the worker is released by the bundle transport before that heavy step runs.
+    inflight: set[str] = set()
+    inflight_lock = threading.Lock()
+
+    def handle(rid, info, concurrency):
+        try:
+            metrics = trigger_fn(
+                cfg, r, rid,
+                float(info.get("success_rate", 0)),
+                int(info.get("task_counter", 0)),
+            )
+            metrics["fl_round"] = int(info.get("fl_round", 0))
+            metrics["checkpoint_mode"] = checkpoint_mode
+            metrics["concurrency_level"] = concurrency
+            writer.write_event(metrics)
+        except Exception as e:
+            import traceback
+            LOG.error("[Monitor] trigger_fn %s failed: %r\n%s",
+                      rid, e, traceback.format_exc())
+            # unblock the worker so the run doesn't hang
+            r.set(f"migration_done:{rid}", "1", ex=600)
+        finally:
+            with inflight_lock:
+                inflight.discard(rid)
+
     def monitor():
-        LOG.info("[Monitor] watching migration requests")
+        LOG.info("[Monitor] watching migration requests (concurrent)")
         while True:
             try:
                 for key in r.keys("migration_request:robot_*"):
@@ -392,27 +425,17 @@ def run_task2(*, condition: str, checkpoint_mode: str, trigger_fn: Callable,
                         continue
                     info = json.loads(raw)
                     rid = info["robot_id"]
+                    with inflight_lock:
+                        if rid in inflight:
+                            continue      # already being handled
+                        inflight.add(rid)
+                        n = len(inflight)
                     r.delete(key)
-                    try:
-                        metrics = trigger_fn(
-                            cfg, r, rid,
-                            float(info.get("success_rate", 0)),
-                            int(info.get("task_counter", 0)),
-                        )
-                        metrics["fl_round"] = int(info.get("fl_round", 0))
-                        metrics["checkpoint_mode"] = checkpoint_mode
-                        metrics["concurrency_level"] = 1
-                        writer.write_event(metrics)
-                    except Exception as e:
-                        import traceback
-                        LOG.error("[Monitor] trigger_fn %s failed: %r\n%s",
-                                  rid, e, traceback.format_exc())
-                        # unblock the worker so the run doesn't hang
-                        r.set(f"migration_done:{rid}", "1", ex=600)
-                    time.sleep(6)
+                    threading.Thread(target=handle, args=(rid, info, n),
+                                     daemon=True).start()
             except Exception as e:
                 LOG.error("[Monitor] %r", e)
-            time.sleep(1)
+            time.sleep(0.5)
 
     threading.Thread(target=monitor, daemon=True).start()
     threading.Thread(target=live_status_loop, args=(cfg, r, writer, 15),

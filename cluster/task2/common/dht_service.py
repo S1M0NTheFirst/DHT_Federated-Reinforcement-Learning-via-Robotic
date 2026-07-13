@@ -90,6 +90,18 @@ class DHTService:
             await s.listen(self.base_port + i, interface=self.host)
             await s.bootstrap([boot_addr])
             self.servers.append(s)
+        # Warm the routing tables: a PUT on node[0] then a GET on node[-1] forces
+        # every node to learn the ring before the FIRST real migration, so the
+        # first measured lookup isn't a cold-cache outlier (which could otherwise
+        # miss and fall back). Best-effort.
+        try:
+            await self.servers[0].set("__warmup__", "1")
+            for _ in range(3):
+                if await self.servers[-1].get("__warmup__") is not None:
+                    break
+                await asyncio.sleep(0.2)
+        except Exception:                             # noqa: BLE001
+            pass
 
     # -- operations -------------------------------------------------------- #
     def _put_node(self) -> Server:
@@ -112,10 +124,19 @@ class DHTService:
         fut = asyncio.run_coroutine_threadsafe(_do(), self.loop)
         return fut.result(timeout=timeout)
 
-    def get(self, key: str, timeout: float = 60.0) -> Tuple[Optional[dict], float]:
+    def get(self, key: str, timeout: float = 60.0,
+            retries: int = 3) -> Tuple[Optional[dict], float]:
         async def _do() -> Tuple[Optional[str], float]:
             t = time.perf_counter()
-            raw = await self._get_node().get(key)
+            raw = None
+            # A freshly-populated key can miss on the very first iterative lookup
+            # (routing still converging); retry a few times. The measured latency
+            # is the full coordination cost until the pointer resolves — honest.
+            for _ in range(max(1, retries)):
+                raw = await self._get_node().get(key)
+                if raw is not None:
+                    break
+                await asyncio.sleep(0.2)
             return raw, (time.perf_counter() - t) * 1000.0
 
         fut = asyncio.run_coroutine_threadsafe(_do(), self.loop)
@@ -137,7 +158,7 @@ class DHTService:
 def get_dht() -> DHTService:
     """Lazily start (once) and return the shared overlay. Ring size / base port
     are configurable via DHT_RING_NODES (default 8) and DHT_BASE_PORT
-    (default 8600, clear of flower 8470 / redis 6470)."""
+    (default 8600, clear of flower 8570 / redis 6579)."""
     global _singleton
     with _singleton_lock:
         if _singleton is None:
