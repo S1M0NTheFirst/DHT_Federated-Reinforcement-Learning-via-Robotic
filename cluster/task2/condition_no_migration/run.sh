@@ -1,14 +1,14 @@
 #!/bin/bash
-#MSUB -N task2_dmtcp
+#MSUB -N task2_no_migration
 #MSUB -W group_list=hpc2-coe-users
 #MSUB -l walltime=12:00:00
 #MSUB -j oe
-# Submit (2-node footprint):
-#   WORKING_NODES="nAAA nBBB" NEED=2 bash tools/submit_free.sh task2/condition_dmtcp/run.sh
-# Requires DMTCP built first: bash task2/apptainer/build_dmtcp.sh  ($HOME/dmtcp)
+# Learning-ceiling baseline: federated SAC with NO migrations.
+# Submit (3-node, same layout as the others for apples-to-apples curves):
+#   WORKING_NODES="nA nB nC" NEED=3 bash tools/submit_free.sh task2/condition_no_migration/run.sh
 
 set -uo pipefail
-CONDITION_DIR="condition_dmtcp"
+CONDITION_DIR="condition_no_migration"
 CLUSTER_ROOT="${CLUSTER_ROOT:-$HOME/cluster}"
 HERE="$CLUSTER_ROOT/task2/$CONDITION_DIR"
 
@@ -16,12 +16,15 @@ source "$CLUSTER_ROOT/common/cluster_config.sh"
 source "$CLUSTER_ROOT/common/cluster_lib.sh"
 source "$CLUSTER_ROOT/task2/common/task2_config.sh"
 
-# 3 = dedicated-server layout (same as dht_frl: server alone on node0, robots on
-# node1+node2) → faster + apples-to-apples with dht. Override with MIN_ALIVE_NODES=2
-# to fall back to the 2-node co-located footprint.
+# Same dedicated-server layout as the other conditions so the reward curve is
+# directly comparable. Override with MIN_ALIVE_NODES=2 for a 2-node footprint.
 export MIN_ALIVE_NODES="${MIN_ALIVE_NODES:-3}"
 
-setup_run_dirs "task2_dmtcp"
+# DISABLE migrations entirely (overrides task2_config.sh's default schedule).
+# Empty schedule -> the worker never requests a migration.
+export MIGRATION_ROUNDS=""
+
+setup_run_dirs "task2_no_migration"
 cleanup_and_exit() { cleanup_all_nodes; exit "${1:-0}"; }
 trap 'cleanup_and_exit 130' INT
 trap 'cleanup_and_exit 143' TERM
@@ -35,11 +38,11 @@ export PYTHONUNBUFFERED=1
 export PYTHONPATH="$CLUSTER_ROOT:${PYTHONPATH:-}"
 export SERVER_NODE CLIENT_NODE_1 CLIENT_NODE_2
 export REDIS_HOST="$SERVER_NODE"
-export CONDITION="dmtcp"
-export RESULTS_DIR="$RESULTS_ROOT/task2_dmtcp"
+export CONDITION="no_migration"
+export RESULTS_DIR="$RESULTS_ROOT/task2_no_migration"
 mkdir -p "$RESULTS_DIR"
 
-echo ">>> Launching task2 dmtcp runner" | tee -a "$RUNNER_LOG"
+echo ">>> Launching task2 no_migration runner (MIGRATION_ROUNDS='')" | tee -a "$RUNNER_LOG"
 python3 -u "$HERE/runner.py" 2>&1 | tee -a "$RUNNER_LOG"
 RC=${PIPESTATUS[0]}
 echo ">>> runner exited rc=$RC" | tee -a "$RUNNER_LOG"
