@@ -104,11 +104,14 @@ def fig1_cdf():
     ax.set_xscale("log")
     ax.set_xlabel("Total migration time (s)")
     ax.set_ylabel("CDF")
-    # Small headroom above CDF=1 only; the compact legend drops down into the
-    # empty upper-left region (curves are all low at small x), so nothing is
-    # squished and the legend never touches a curve.
-    ax.set_ylim(0, 1.24)
+    # The legend now lives in the empty lower-right region (at large x every
+    # curve has already risen to CDF=1, so that corner is clear). Only a small
+    # top headroom is needed; add a little right-side headroom so the legend
+    # box sits in open space and never touches a curve.
+    ax.set_ylim(0, 1.05)
     ax.set_yticks(np.arange(0, 1.01, 0.25))
+    xlo, xhi = ax.get_xlim()
+    ax.set_xlim(xlo, xhi * 3.2)
 
     # full box with clean, evenly-spaced decade ticks on x;
     # no log minor ticks -- their uneven spacing read as "inconsistent"
@@ -121,9 +124,9 @@ def fig1_cdf():
                    top=True, right=True)
     # empty background: no grid lines behind the curves
 
-    # compact, smaller legend tucked into the empty upper-left corner
-    leg = ax.legend(loc="upper left", bbox_to_anchor=(0.0, 1.015),
-                    fontsize=15, handlelength=1.6, handletextpad=0.5,
+    # compact, smaller legend tucked into the empty lower-right corner
+    leg = ax.legend(loc="lower right", bbox_to_anchor=(0.99, 0.02),
+                    fontsize=17, handlelength=1.6, handletextpad=0.5,
                     labelspacing=0.28, borderpad=0.3, frameon=False)
     # fixed canvas (tight=False) so fig1 width matches fig2/fig3 exactly;
     # pin margins so the plot box is exactly 210 pt tall (== fig2/fig3)
