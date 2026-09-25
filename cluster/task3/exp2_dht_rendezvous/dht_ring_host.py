@@ -426,10 +426,6 @@ def main() -> None:
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s [exp2_host] %(message)s")
-    if sys.platform == "win32":
-        # Local smoke test only: on the Proactor loop, one ICMP port-unreachable
-        # from a killed peer ends the UDP read loop and the node goes deaf.
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(amain(a))
 
 
