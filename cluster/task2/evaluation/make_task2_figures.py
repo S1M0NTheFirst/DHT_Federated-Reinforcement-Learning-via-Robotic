@@ -3,6 +3,7 @@ Task2 final figures — consistent Arial font everywhere, PDF only.
   fig1: CDF of total migration time
   fig2: reward vs FL round — DHT-FRL, cold restart, no migration
   fig3: latency per condition — downtime & MTT (median bar + IQR error bar)
+  fig4: cumulative FL round time vs round — fleet-wide cost of migration stalls
 """
 import csv, os, statistics as st
 import numpy as np, matplotlib as mpl, matplotlib.pyplot as plt
@@ -200,6 +201,46 @@ def fig3_latency():
     save(fig, "fig3", tight=False)
 
 
+def round_times(c):
+    p = os.path.join(RES, f"task2_{c}", "fl_latency.csv")
+    rows = sorted((int(r["round"]), float(r["total_latency"]))
+                  for r in csv.DictReader(open(p)))
+    return [r for r, _ in rows], [t for _, t in rows]
+
+
+# ---------------- fig4: fleet-wide cost — cumulative FL round time ----------------
+def fig4_fleet_time():
+    # Synchronous FedAvg (min_fit_clients = all robots): a stalled migration
+    # blocks every robot's round. cold_restart is omitted as in fig1/fig3.
+    order = ["no_migration", "dht_frl", "tcp_scp", "app_cold", "app_warm", "dmtcp"]
+    MIGS = [30, 60, 90, 120, 140]
+    fig, ax = plt.subplots(figsize=(9.4, 4.2))
+    for m in MIGS:
+        ax.axvline(m, color="red", lw=1.2, ls=":", zorder=0)
+    for c in order:
+        xs, ts = round_times(c)
+        ys = np.cumsum(ts) / 60.0
+        ls = "--" if c == "no_migration" else LS[c]
+        ax.plot(xs, ys, color=COLOR[c], ls=ls,
+                lw=3.0 if c == "dht_frl" else 2.4, label=LAB[c],
+                solid_capstyle="round", solid_joinstyle="round",
+                zorder=5 if c == "dht_frl" else 3)
+    ax.plot([], [], color="red", lw=1.2, ls=":", label="Migration round")
+    ax.set_xlabel("Federated learning round")
+    ax.set_ylabel("Cumulative time (min)")
+    ax.set_xlim(0, 150)
+    ax.set_ylim(0, 120)
+    ax.set_yticks([0, 30, 60, 90, 120])
+    ax.tick_params(direction="in", which="both", top=True, right=True)
+    ax.legend(loc="upper left", bbox_to_anchor=(0.0, 1.015), ncol=2,
+              fontsize=15, handlelength=1.6, handletextpad=0.5,
+              labelspacing=0.28, columnspacing=1.0, borderpad=0.3,
+              frameon=False)
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.2196, top=0.914)
+    save(fig, "fig4", tight=False)
+
+
 if __name__ == "__main__":
-    fig1_cdf(); fig2_reward(); fig3_latency()
+    fig1_cdf(); fig2_reward(); fig3_latency(); fig4_fleet_time()
     print("\n->", FIG)

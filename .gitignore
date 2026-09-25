@@ -11,3 +11,12 @@ cluster/_archive/old_design_logs/
 
 # Paper drafts — not tracked in this repo
 paper/
+Light_migration_Robots_SoCC_July14_2026*/
+atc25-chang.pdf
+
+# Generated figures/results — paper output, not experiment setup
+cluster/evaluation/figures/
+cluster/evaluation2/*.pdf
+cluster/evaluation2/*.png
+cluster/task2/evaluation/figures/
+cluster/results/
