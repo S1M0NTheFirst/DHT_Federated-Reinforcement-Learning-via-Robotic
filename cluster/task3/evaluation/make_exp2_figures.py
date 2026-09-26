@@ -3,6 +3,8 @@ Exp2 figures (same look as task2/evaluation/make_task2_figures.py), PDF only.
   exp2_latency       : CDF of lookup / publish latency, DHT vs Redis (largest ring)
   exp2_scaling       : DHT median lookup / publish latency vs ring size (DHT only)
   exp2_hops          : messages and lookup rounds per DHT lookup vs ring size
+  exp2_load          : requests per coordination node when every robot migrates
+                       once (Redis: its one server; DHT: per-node average)
   exp2_churn         : lookup success vs % of nodes failed at random, DHT k=3/k=8
                        vs Redis. Redis runs on one of the N nodes, so under the
                        same random failures it survives with probability (N-C)/N;
@@ -175,6 +177,41 @@ def fig_hops(rows, figdir):
     save(fig, figdir, "exp2_hops")
 
 
+def load_points(rows):
+    """Coordination requests per node when each of the N robots migrates once
+    (one publish + one lookup), from the measured messages per operation.
+    Redis: its one server receives all 2N requests. DHT: N x (messages per
+    publish + per lookup), spread over the N ring nodes -> per-node average."""
+    scale = pick(rows, phase="scale", backend="dht")
+    sizes = sorted({r["ring_size"] for r in scale})
+    out = []
+    for n in sizes:
+        msgs = {op: st.mean([r["rpcs"] for r in pick(scale, op=op, ring_size=n)
+                             if r["ok"]]) for op in ("put", "get")}
+        out.append((n, 2 * n, msgs["put"] + msgs["get"]))
+    return out
+
+
+def fig_load(rows, figdir):
+    pts = load_points(rows)
+    if not pts:
+        return
+    sizes = [p[0] for p in pts]
+    fig, ax = plt.subplots(figsize=(9.4, 4.2))
+    ax.plot(sizes, [p[1] for p in pts], color=REDIS_GREY, ls="--", marker="D",
+            ms=8, lw=2.4, label="Redis (1 server)")
+    ax.plot(sizes, [p[2] for p in pts], color=DHT_BLUE, ls="-", marker="o",
+            ms=8, lw=2.4, label="DHT (per node, average)")
+    log2_sizes_axis(ax, sizes)
+    ax.set_xlabel("Fleet size (nodes)")
+    ax.set_ylabel("Requests per node")
+    ax.set_ylim(0, None)
+    frame(ax)
+    ax.legend(loc="upper left", **LEG)
+    ax.margins(y=0.15)
+    save(fig, figdir, "exp2_load")
+
+
 def churn_points(rows, k):
     churn = pick(rows, phase="churn", backend="dht", op="get", ksize=k)
     counts = sorted({r["fail_count"] for r in churn})
@@ -306,6 +343,7 @@ def main():
     fig_latency(rows, a.figdir)
     fig_scaling(rows, a.figdir)
     fig_hops(rows, a.figdir)
+    fig_load(rows, a.figdir)
     fig_churn(rows, a.figdir)
     print_summary(rows)
     print("\n->", a.figdir)
