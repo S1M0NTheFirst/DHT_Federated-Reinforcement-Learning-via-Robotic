@@ -15,9 +15,13 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-FIELDS = ["phase", "trial", "ksize", "ring_size", "fail_count", "backend", "op",
-          "key_idx", "client_host", "node_g", "ms", "ok", "rpcs", "rounds",
-          "timeouts", "replicas", "err"]
+# fail_count : nodes the run kills (identifies the run; same on every row of it)
+# dead_at_op : nodes actually dead when this op ran (churn PUTs run before the
+#              kill -> 0; Redis GETs after SHUTDOWN -> 1)
+# replicas   : copies written (PUT rows only; empty on GET rows)
+FIELDS = ["phase", "trial", "ksize", "ring_size", "fail_count", "dead_at_op",
+          "backend", "op", "key_idx", "client_host", "node_g", "ms", "ok",
+          "rpcs", "rounds", "timeouts", "replicas", "err"]
 WARMUP_KEYS = 20
 
 
@@ -67,6 +71,7 @@ class Bench:
         self.alive: dict[int, list[int]] = {}
         self.tag = f"exp2:{a.phase}:k{a.ksize}:n{a.ring_size}:t{a.trial}:f{a.fail_count}"
         self.rows: list[dict] = []
+        self.dead_now = 0          # ring nodes killed so far in this run
 
     # -- helpers ------------------------------------------------------------ #
     def call_all(self, reqs: dict[int, dict]) -> dict[int, dict]:
@@ -134,7 +139,10 @@ class Bench:
 
     def record(self, backend: str, op: str, host_idx: int,
                results: list[dict], fail_count: int | None = None) -> None:
+        # fail_count is only passed for Redis (0 = server up, 1 = shut down),
+        # where it is also what was dead at the time of the op.
         fc = self.a.fail_count if fail_count is None else fail_count
+        dead = self.dead_now if fail_count is None else fail_count
         for r in results:
             row = {k: r.get(k, "") for k in FIELDS}
             # Redis rows keep the ring size of the run they were measured in
@@ -142,9 +150,11 @@ class Bench:
             row.update(phase=self.a.phase, trial=self.a.trial,
                        ksize=self.a.ksize if backend == "dht" else "",
                        ring_size=self.a.ring_size,
-                       fail_count=fc, backend=backend, op=op,
+                       fail_count=fc, dead_at_op=dead, backend=backend, op=op,
                        client_host=self.hosts[host_idx].hostname,
                        ms=round(r["ms"], 4))
+            if op == "get":
+                row["replicas"] = ""
             self.rows.append(row)
 
     # -- DHT operations ----------------------------------------------------- #
@@ -245,6 +255,7 @@ class Bench:
                                for h, v in victims.items() if v})
         for h, r in resps.items():
             self.alive[h] = r["alive"]
+        self.dead_now += sum(len(v) for v in victims.values())
         print(f"[bench] killed {n} nodes, per host "
               f"{[len(victims[h]) for h in sorted(victims)]}", flush=True)
 
@@ -294,7 +305,7 @@ class Bench:
     def summarize(self) -> None:
         groups: dict[tuple, list[dict]] = {}
         for r in self.rows:
-            groups.setdefault((r["backend"], r["op"], r["fail_count"]), []).append(r)
+            groups.setdefault((r["backend"], r["op"], r["dead_at_op"]), []).append(r)
         for (b, op, fc), rs in sorted(groups.items(), key=str):
             okms = [r["ms"] for r in rs if r["ok"]]
             succ = 100.0 * sum(1 for r in rs if r["ok"]) / len(rs)
@@ -303,7 +314,7 @@ class Bench:
             rnd = [r["rounds"] for r in rs if r["ok"] and r["rounds"] != ""]
             extra = (f" rpcs~{st.median(rpcs):.0f} rounds~{st.median(rnd):.0f}"
                      if rpcs and rnd else "")
-            print(f"[bench] {self.a.phase:10s} {b:5s} {op:3s} fail={fc!s:>3} "
+            print(f"[bench] {self.a.phase:10s} {b:5s} {op:3s} dead={fc!s:>3} "
                   f"n={len(rs):4d} success={succ:6.1f}% median={med}{extra}",
                   flush=True)
 

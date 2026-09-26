@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextvars
+import heapq
 import inspect
 import json
 import logging
@@ -19,6 +20,7 @@ from kademlia.crawling import NodeSpiderCrawl, ValueSpiderCrawl
 from kademlia.network import Server
 from kademlia.node import Node
 from kademlia.protocol import KademliaProtocol
+from kademlia.routing import RoutingTable
 from kademlia.utils import digest
 
 # rpcudp logs every RPC timeout at ERROR; timeouts are counted per op instead.
@@ -39,10 +41,27 @@ def _bump(field: str) -> None:
         c[field] += 1
 
 
+class FullScanRoutingTable(RoutingTable):
+    """kademlia 2.2.3's TableTraverser gives up once the buckets on one side of
+    the target run out, even when the other side still holds contacts, so a
+    node with a populated table can return no neighbours at all (seen on the
+    cluster: a lookup with 0 RPCs -> not_found). Rank every known contact
+    instead: the k closest known contacts, as Kademlia specifies."""
+
+    def find_neighbors(self, node, k=None, exclude=None):
+        k = k or self.ksize
+        self.buckets[self.get_bucket_for(node)].touch_last_updated()
+        peers = [n for b in self.buckets for n in b.get_nodes()
+                 if n.id != node.id
+                 and (exclude is None or not n.same_home_as(exclude))]
+        return heapq.nsmallest(k, peers, key=node.distance_to)
+
+
 class CountingProtocol(KademliaProtocol):
     def __init__(self, source_node, storage, ksize, wait_timeout):
         super().__init__(source_node, storage, ksize)
         self._wait_timeout = wait_timeout
+        self.router = FullScanRoutingTable(self, ksize, source_node)
 
     async def _counted(self, call, *args):
         _bump("rpcs")
@@ -398,10 +417,25 @@ async def amain(a: argparse.Namespace) -> None:
                                      limit=1 << 26)
     LOG.info("host %d control port %s:%d", a.host_index, a.bind, a.ctrl_port)
     starter = asyncio.ensure_future(host.start_nodes())
+
+    # Exit when whatever launched us goes away (the job's SSH session or shell).
+    # Killing the local ssh client does not reliably signal a remote command
+    # that has no tty, so without this a ring host can outlive its job and
+    # keep the ports busy for the next ring.
+    parent = os.getppid()
+
+    async def orphan_watch() -> None:
+        while os.getppid() == parent:
+            await asyncio.sleep(2.0)
+        LOG.warning("launcher (pid %d) is gone, exiting", parent)
+        host.done.set()
+
+    watcher = asyncio.ensure_future(orphan_watch())
     try:
         await asyncio.wait_for(host.done.wait(), a.max_lifetime)
     except asyncio.TimeoutError:
         LOG.warning("max lifetime %ss reached, exiting", a.max_lifetime)
+    watcher.cancel()
     starter.cancel()
     host.stop_all()
     srv.close()

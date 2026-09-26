@@ -16,7 +16,9 @@ export REDIS_PORT=6679
 # --------------------------------------------------------------------------- #
 # Exp2 — DHT rendezvous vs a central coordinator (Redis). No robots / no FL.   #
 # --------------------------------------------------------------------------- #
-export EXP2_DHT_BASE_PORT=8700        # ring nodes on each host use 8700..8700+n-1
+# UDP between compute nodes is only open on 23000-24000 (admin rule, Sep 2026);
+# TCP is open on the high ranges, so the control port stays where it was.
+export EXP2_DHT_BASE_PORT=23700       # ring nodes on each host use 23700..23700+n-1 (UDP)
 export EXP2_CTRL_PORT=8690            # one control port per ring-host process
 export EXP2_ALPHA=3                   # Kademlia lookup parallelism (library default)
 export EXP2_RPC_TIMEOUT=1.0           # seconds before a silent peer counts as dead
@@ -27,6 +29,8 @@ export EXP2_HOST_MAX_LIFETIME=1800    # ring hosts self-exit after this (no orph
 export EXP2_RING_SIZES="8 16 32 64 128"
 export EXP2_KSIZE=3
 export EXP2_KEYS=500
+export EXP2_SCALE_CONCURRENCY=1       # one op at a time: per-op latency without
+                                      # client-side queueing (churn keeps 16 in flight)
 
 # Churn: kill this many of EXP2_CHURN_N nodes (random), then look every key up.
 # Each (ksize, trial, fail count) gets a fresh ring so levels are independent.

@@ -1,9 +1,14 @@
 """
 Exp2 figures (same look as task2/evaluation/make_task2_figures.py), PDF only.
-  exp2_latency : lookup + publish latency vs ring size, DHT vs Redis
-  exp2_hops    : messages and lookup rounds per DHT lookup vs ring size
-  exp2_churn   : lookup success vs failed coordination nodes (DHT k=3/k=8, Redis)
-  exp2_churn_latency : median successful-lookup latency vs failed nodes
+  exp2_latency       : CDF of lookup / publish latency, DHT vs Redis (largest ring)
+  exp2_scaling       : DHT median lookup / publish latency vs ring size (DHT only)
+  exp2_hops          : messages and lookup rounds per DHT lookup vs ring size
+  exp2_churn         : lookup success vs % of nodes failed at random, DHT k=3/k=8
+                       vs Redis. Redis runs on one of the N nodes, so under the
+                       same random failures it survives with probability (N-C)/N;
+                       its curve is that probability applied to the measured
+                       success with the server up / shut down (redis_down phase).
+  exp2_churn_latency : median successful-lookup latency vs % failed (DHT only)
 Usage: python3 make_exp2_figures.py [--results DIR] [--figdir DIR]
 """
 import argparse
@@ -35,6 +40,7 @@ DEFAULT_RES = os.path.join(HERE, "..", "results", "exp2_dht_rendezvous")
 DEFAULT_FIG = os.path.join(HERE, "figures")
 
 DHT_BLUE = "#0072B2"      # DHT-FRL blue, as in the task2 figures
+DHT_LIGHT = "#56B4E9"     # second DHT setting (more replicas)
 REDIS_GREY = "#555555"    # central-coordinator baseline
 LEG = dict(fontsize=15, handlelength=1.8, handletextpad=0.5, labelspacing=0.28,
            borderpad=0.3, frameon=False)
@@ -83,33 +89,66 @@ def log2_sizes_axis(ax, sizes):
 
 
 def fig_latency(rows, figdir):
+    """CDF of per-op latency at the largest ring size (one op at a time)."""
     scale = pick(rows, phase="scale")
     sizes = sorted({r["ring_size"] for r in scale if r["backend"] == "dht"})
     if not sizes:
         return
+    n = sizes[-1]
     fig, ax = plt.subplots(figsize=(9.4, 4.2))
-    series = [("dht", "get", DHT_BLUE, "-", "o", "DHT lookup"),
-              ("dht", "put", DHT_BLUE, "--", "^", "DHT publish"),
-              ("redis", "get", REDIS_GREY, "-", "s", "Redis GET"),
-              ("redis", "put", REDIS_GREY, "--", "D", "Redis SET")]
-    for backend, op, color, ls, mk, label in series:
-        pts = [med_iqr([r["ms"] for r in pick(scale, backend=backend, op=op,
-                                              ring_size=n) if r["ok"]])
-               for n in sizes]
-        m = np.array([p[0] for p in pts])
-        if np.all(np.isnan(m)):
+    series = [("dht", "get", DHT_BLUE, "-", "DHT lookup"),
+              ("dht", "put", DHT_BLUE, "--", "DHT publish"),
+              ("redis", "get", REDIS_GREY, "-", "Redis GET"),
+              ("redis", "put", REDIS_GREY, "--", "Redis SET")]
+    allx = []
+    for backend, op, color, ls, label in series:
+        x = np.sort([r["ms"] for r in pick(scale, backend=backend, op=op,
+                                            ring_size=n) if r["ok"]])
+        if not len(x):
             continue
-        err = [[p[1] for p in pts], [p[2] for p in pts]]
-        ax.errorbar(sizes, m, yerr=err, color=color, ls=ls, marker=mk, ms=8,
-                    capsize=3, lw=2.4, elinewidth=1.1, label=label)
-    log2_sizes_axis(ax, sizes)
-    ax.set_yscale("log")
-    ax.set_xlabel("DHT ring size (nodes)")
-    ax.set_ylabel("Latency (ms)")
+        allx.extend(x)
+        ax.plot(x, np.arange(1, len(x) + 1) / len(x), color=color, ls=ls,
+                label=label)
+    ax.set_xscale("log")
+    lo, hi = min(allx) / 1.2, max(allx) * 1.2
+    # keep ticks off the left edge so they do not collide with the y labels
+    ticks = [t for t in (0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50)
+             if lo * 1.15 <= t <= hi]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([f"{t:g}" for t in ticks])
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.set_xlim(lo, hi)
+    ax.set_xlabel(f"Latency (ms), {n}-node DHT")
+    ax.set_ylabel("CDF")
+    ax.set_ylim(0, 1.02)
     frame(ax)
-    ax.legend(loc="upper left", ncol=2, **LEG)
-    ax.margins(y=0.25)
+    ax.legend(loc="lower right", **LEG)
     save(fig, figdir, "exp2_latency")
+
+
+def fig_scaling(rows, figdir):
+    """DHT only: Redis has no ring, so it has no value on this axis."""
+    scale = pick(rows, phase="scale", backend="dht")
+    sizes = sorted({r["ring_size"] for r in scale})
+    if not sizes:
+        return
+    fig, ax = plt.subplots(figsize=(9.4, 4.2))
+    for op, ls, mk, label in (("get", "-", "o", "DHT lookup"),
+                              ("put", "--", "^", "DHT publish")):
+        pts = [med_iqr([r["ms"] for r in pick(scale, op=op, ring_size=n) if r["ok"]])
+               for n in sizes]
+        err = [[p[1] for p in pts], [p[2] for p in pts]]
+        ax.errorbar(sizes, [p[0] for p in pts], yerr=err, color=DHT_BLUE, ls=ls,
+                    marker=mk, ms=8, capsize=3, lw=2.4, elinewidth=1.1,
+                    label=label)
+    log2_sizes_axis(ax, sizes)
+    ax.set_xlabel("DHT ring size (nodes)")
+    ax.set_ylabel("Median latency (ms)")
+    ax.set_ylim(0, None)
+    frame(ax)
+    ax.legend(loc="upper left", **LEG)
+    ax.margins(y=0.3)
+    save(fig, figdir, "exp2_scaling")
 
 
 def fig_hops(rows, figdir):
@@ -126,7 +165,6 @@ def fig_hops(rows, figdir):
         err = [[p[1] for p in pts], [p[2] for p in pts]]
         ax.errorbar(sizes, m, yerr=err, color=DHT_BLUE, ls=ls, marker=mk, ms=8,
                     capsize=3, lw=2.4, elinewidth=1.1, label=label)
-    ax.axhline(1, color=REDIS_GREY, ls=":", lw=2.0, label="Redis (1 request)")
     log2_sizes_axis(ax, sizes)
     ax.set_xlabel("DHT ring size (nodes)")
     ax.set_ylabel("Count per lookup")
@@ -152,37 +190,49 @@ def churn_points(rows, k):
     return out
 
 
+def redis_rates(rows):
+    """Measured Redis GET success with its server up (fail 0) and down (fail 1)."""
+    red = pick(rows, phase="redis_down", backend="redis", op="get")
+    rate = {}
+    for c in (0, 1):
+        sel = [r for r in red if r["fail_count"] == c]
+        if sel:
+            rate[c] = 100.0 * sum(r["ok"] for r in sel) / len(sel)
+    return rate
+
+
+def churn_axis(ax, counts, n):
+    ax.set_xticks(range(len(counts)))
+    ax.set_xticklabels([f"{100 * c / n:.0f}%" for c in counts])
+    ax.set_xlabel(f"Randomly failed nodes (of {n})")
+
+
 def fig_churn(rows, figdir):
-    ks = sorted({r["ksize"] for r in pick(rows, phase="churn", backend="dht")}, key=int)
+    dht = pick(rows, phase="churn", backend="dht")
+    ks = sorted({r["ksize"] for r in dht}, key=int)
     if not ks:
         return
-    n = pick(rows, phase="churn", backend="dht")[0]["ring_size"]
-    counts = sorted({r["fail_count"] for r in pick(rows, phase="churn", backend="dht")})
+    n = dht[0]["ring_size"]
+    counts = sorted({r["fail_count"] for r in dht})
     xpos = {c: i for i, c in enumerate(counts)}
-    styles = [("-", "o"), ("-.", "s"), (":", "^")]
+    styles = [(DHT_BLUE, "-", "o"), (DHT_LIGHT, "-.", "s"), (DHT_BLUE, ":", "^")]
 
     fig, ax = plt.subplots(figsize=(9.4, 4.2))
-    for (ls, mk), k in zip(styles, ks):
+    rate = redis_rates(rows)
+    if 0 in rate and 1 in rate:
+        # One server on one of the n nodes: up with probability (n - c) / n.
+        ry = [rate[0] * (n - c) / n + rate[1] * c / n for c in counts]
+        ax.plot(range(len(counts)), ry, color=REDIS_GREY, ls="--", marker="D",
+                ms=8, lw=2.4, label="Redis (1 server)")
+    for (color, ls, mk), k in zip(styles, ks):
         pts = churn_points(rows, k)
         x = [xpos[p[0]] for p in pts]
         y = [p[1] for p in pts]
         err = [[p[1] - p[2] for p in pts], [p[3] - p[1] for p in pts]]
-        ax.errorbar(x, y, yerr=err, color=DHT_BLUE, ls=ls, marker=mk, ms=8,
+        ax.errorbar(x, y, yerr=err, color=color, ls=ls, marker=mk, ms=8,
                     capsize=3, lw=2.4, elinewidth=1.1,
                     label=f"DHT, {k} replicas")
-    red = pick(rows, phase="redis_down", backend="redis", op="get")
-    # Redis has one server: it is only measured at 0 and 1 failed nodes.
-    red_x = [c for c in (0, 1) if c in xpos]
-    if red and red_x:
-        ry = []
-        for c in red_x:
-            sel = [r for r in red if r["fail_count"] == c]
-            ry.append(100.0 * sum(r["ok"] for r in sel) / len(sel) if sel else np.nan)
-        ax.plot([xpos[c] for c in red_x], ry, color=REDIS_GREY, ls="--",
-                marker="D", ms=8, lw=2.4, label="Redis (1 server)")
-    ax.set_xticks(range(len(counts)))
-    ax.set_xticklabels([str(c) for c in counts])
-    ax.set_xlabel(f"Failed coordination nodes (of {n} DHT nodes)")
+    churn_axis(ax, counts, n)
     ax.set_ylabel("Lookup success (%)")
     ax.set_ylim(-5, 125)
     ax.set_yticks([0, 25, 50, 75, 100])
@@ -191,17 +241,15 @@ def fig_churn(rows, figdir):
     save(fig, figdir, "exp2_churn")
 
     fig, ax = plt.subplots(figsize=(9.4, 4.2))
-    for (ls, mk), k in zip(styles, ks):
+    for (color, ls, mk), k in zip(styles, ks):
         pts = churn_points(rows, k)
         x = [xpos[p[0]] for p in pts]
         m = [p[4][0] for p in pts]
         err = [[p[4][1] for p in pts], [p[4][2] for p in pts]]
-        ax.errorbar(x, m, yerr=err, color=DHT_BLUE, ls=ls, marker=mk, ms=8,
+        ax.errorbar(x, m, yerr=err, color=color, ls=ls, marker=mk, ms=8,
                     capsize=3, lw=2.4, elinewidth=1.1, label=f"DHT, {k} replicas")
-    ax.set_xticks(range(len(counts)))
-    ax.set_xticklabels([str(c) for c in counts])
+    churn_axis(ax, counts, n)
     ax.set_yscale("log")
-    ax.set_xlabel(f"Failed DHT nodes (of {n})")
     ax.set_ylabel("Lookup latency (ms)")
     frame(ax)
     ax.legend(loc="upper left", **LEG)
@@ -225,11 +273,17 @@ def print_summary(rows):
     for k in sorted({r["ksize"] for r in pick(rows, phase="churn", backend="dht")}, key=int):
         pts = churn_points(rows, k)
         print(f"k={k}: " + ", ".join(f"{c} dead -> {m:.1f}%" for c, m, *_ in pts))
-    red = pick(rows, phase="redis_down", backend="redis", op="get")
+    rate = redis_rates(rows)
     for c, label in ((0, "up"), (1, "down")):
-        sel = [r for r in red if r["fail_count"] == c]
-        if sel:
-            print(f"redis server {label}: {100 * sum(r['ok'] for r in sel) / len(sel):.1f}% ok")
+        if c in rate:
+            print(f"redis server {label}: {rate[c]:.1f}% ok")
+    dht = pick(rows, phase="churn", backend="dht")
+    if dht and 0 in rate and 1 in rate:
+        n = dht[0]["ring_size"]
+        counts = sorted({r["fail_count"] for r in dht})
+        print("redis expected under the same random failures: " + ", ".join(
+            f"{c} dead -> {rate[0] * (n - c) / n + rate[1] * c / n:.1f}%"
+            for c in counts))
 
 
 def main():
@@ -250,6 +304,7 @@ def main():
     print("results:", res)
     rows = load(res)
     fig_latency(rows, a.figdir)
+    fig_scaling(rows, a.figdir)
     fig_hops(rows, a.figdir)
     fig_churn(rows, a.figdir)
     print_summary(rows)

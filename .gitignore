@@ -7,6 +7,7 @@ cluster/common/pretrained_policy.pt
 # Run logs — copied back from the cluster, not source
 cluster/logs/
 cluster/task2/logs/
+cluster/task3/logs/
 cluster/_archive/old_design_logs/
 
 # Paper drafts — not tracked in this repo
@@ -19,4 +20,6 @@ cluster/evaluation/figures/
 cluster/evaluation2/*.pdf
 cluster/evaluation2/*.png
 cluster/task2/evaluation/figures/
+cluster/task3/evaluation/figures/
 cluster/results/
+cluster/task3/results/
