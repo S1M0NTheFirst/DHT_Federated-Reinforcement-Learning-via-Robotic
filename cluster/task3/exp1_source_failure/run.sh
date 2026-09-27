@@ -1,14 +1,15 @@
 #!/bin/bash
 #MSUB -N task3_exp1
 #MSUB -W group_list=hpc2-coe-users
-#MSUB -l walltime=03:00:00
+#MSUB -l walltime=03:30:00
 #MSUB -j oe
 # Exp1 — the SOURCE dies during a migration. Real FL fleet (task2 Hopper SAC
 # workers + Flower FedAvg, 3 nodes); at each migration the source worker is
 # SIGKILLed and its bundle deleted at a kill point (after_save / mid_transfer /
 # after_transfer), then the robot is relaunched on the destination from any
 # surviving copy of its state. One job = one condition (or all, in sequence):
-#   dht_frl | dht_r0 | tcp_scp | cold_restart | all   (see exp1_config.sh)
+#   dht_frl | dht_r0 | app_cold | app_warm | tcp_scp | cold_restart, a '+'
+#   list of these (e.g. app_cold+app_warm; msub -v splits on commas), or all
 #
 # NEVER run two jobs on the same nodes: Redis start-up and the final cleanup
 # kill ALL of your redis-server / apptainer processes on this job's nodes. The
@@ -18,7 +19,7 @@
 #   cluster/tools/submit_free.sh cluster/task3/exp1_source_failure/run.sh -v EXP1_CONDITION=dht_frl
 # Quick sanity run, every condition in one job (~1 h):
 #   cluster/tools/submit_free.sh cluster/task3/exp1_source_failure/run.sh \
-#       -v EXP1_CONDITION=all,OVR_EXP1_QUICK=1 -l walltime=01:45:00
+#       -v EXP1_CONDITION=all,OVR_EXP1_QUICK=1 -l walltime=02:00:00
 # Figures afterwards (results copied back):
 #   python3 cluster/task3/evaluation/make_exp1_figures.py
 
@@ -32,23 +33,25 @@ source "$CLUSTER_ROOT/task2/common/task2_config.sh"
 source "$CLUSTER_ROOT/task3/common/task3_config.sh"
 source "$HERE/exp1_config.sh"
 
+ALL_CONDS="dht_frl dht_r0 app_cold app_warm tcp_scp cold_restart"
 if [[ "$EXP1_CONDITION" == all ]]; then
-    CONDS=(dht_frl dht_r0 tcp_scp cold_restart)
+    read -r -a CONDS <<< "$ALL_CONDS"
 else
-    CONDS=("$EXP1_CONDITION")
+    IFS=',+' read -r -a CONDS <<< "$EXP1_CONDITION"    # one, or a + list
 fi
 USES_DHT=0
 for c in "${CONDS[@]}"; do
-    case "$c" in
-        dht_frl|dht_r0|tcp_scp|cold_restart) ;;
-        *) echo "FATAL: EXP1_CONDITION='$EXP1_CONDITION' (dht_frl|dht_r0|tcp_scp|cold_restart|all)"
+    case " $ALL_CONDS " in
+        *" $c "*) ;;
+        *) echo "FATAL: EXP1_CONDITION='$EXP1_CONDITION': use one or a + list of" \
+                "($ALL_CONDS), or all"
            exit 1 ;;
     esac
     [[ "$c" == dht_* ]] && USES_DHT=1
 done
 
 export MIN_ALIVE_NODES=3
-setup_run_dirs "exp1_source_failure/${EXP1_CONDITION}"
+setup_run_dirs "exp1_source_failure/${EXP1_CONDITION//,/+}"
 BASE_LOG_DIR="$RUN_LOG_DIR"
 STAMP="${PBS_JOBID:-$(date +%Y%m%d_%H%M%S)}"
 
@@ -237,6 +240,15 @@ python3 -u $HERE/net_check.py probe --udp-ports $udp --udp-info $info $targets" 
     return $rc
 }
 
+# dht_alive: every ring-host launcher (local process or tracked ssh) still runs.
+dht_alive() {
+    local h
+    [[ ${#DHT_PIDS[@]} -eq 3 ]] || return 1
+    for h in 0 1 2; do
+        kill -0 "${DHT_PIDS[$h]}" 2>/dev/null || return 1
+    done
+}
+
 # start_dht: EXP1_DHT_NODES_PER_HOST ring nodes on each of the 3 nodes.
 start_dht() {
     local m="$EXP1_DHT_NODES_PER_HOST" h
@@ -314,7 +326,7 @@ fi
 between_conditions() {
     local c="$1" n
     local wpat="^python3 [^ ]*exp1_worker[.]py .* --run-tag exp1_${c}\$"
-    local fpat='^python3 /cluster_app/task2/flower_server[.]py$'
+    local fpat='^python3 /cluster_app/task3/exp1_source_failure/exp1_flower_server[.]py$'
     for n in "${HOSTS[@]}"; do
         on_node "$n" "pkill -9 -u \$USER -f '$wpat' 2>/dev/null; \
 pkill -9 -u \$USER -f '$fpat' 2>/dev/null; \
@@ -330,6 +342,15 @@ for c in "${CONDS[@]}"; do
     # CONDITION names the worker/checkpoint namespace (/tmp/swiftbot_exp1_<c>),
     # the --run-tag the runner's SIGKILL matches on and the DHT key namespace.
     export EXP1_CONDITION="$c" CONDITION="exp1_${c}"
+    if [[ "$c" == dht_* ]] && ! dht_alive; then
+        echo ">>> [$c] DHT ring hosts are gone - restarting the ring" | tee -a "$RUNNER_LOG"
+        kill_dht_hosts
+        if ! start_dht; then
+            echo "!!! [$c] DHT ring did not restart; skipping $c" | tee -a "$RUNNER_LOG"
+            RC=1
+            continue
+        fi
+    fi
     if [[ ${#CONDS[@]} -gt 1 ]]; then
         export RUN_LOG_DIR="$BASE_LOG_DIR/$c"
         mkdir -p "$RUN_LOG_DIR"

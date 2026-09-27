@@ -1,7 +1,9 @@
 """
 Exp1 figures (same look as make_exp2_figures.py / task2 figures), PDF only.
   exp1_state_preserved : % of migrations whose robot resumed with its full state
-                         (replay buffer + optimizer), per kill point and condition
+                         (replay buffer + optimizer), per kill point and condition;
+                         App-CR warm's restores of an older pre-copy are stacked
+                         on top, hatched and lighter ("stale")
   exp1_reward          : fleet mean eval return vs FL round per condition, with
                          the migration waves marked (source killed every time)
   exp1_downtime        : median robot downtime per kill point and condition
@@ -38,12 +40,16 @@ DEFAULT_RES = os.path.join(HERE, "..", "results", "exp1_source_failure")
 DEFAULT_FIG = os.path.join(HERE, "figures")
 
 # task2 colours for the shared conditions; the DHT ablation gets a light blue.
-ORDER = ["dht_frl", "dht_r0", "tcp_scp", "cold_restart"]
-COLOR = {"dht_frl": "#0072B2", "dht_r0": "#56B4E9", "tcp_scp": "#E69F00",
-         "cold_restart": "#D55E00"}
-HATCH = {"dht_frl": "", "dht_r0": "//", "tcp_scp": "", "cold_restart": "\\\\"}
-LS = {"dht_frl": "-", "dht_r0": (0, (5, 1)), "tcp_scp": "--", "cold_restart": "-."}
-LAB = {"dht_frl": "DHT-FRL", "dht_r0": "DHT, no replica", "tcp_scp": "App-CR direct",
+ORDER = ["dht_frl", "dht_r0", "app_cold", "app_warm", "tcp_scp", "cold_restart"]
+# Same colours / names as the task2 paper figures (make_task2_figures.py).
+COLOR = {"dht_frl": "#0072B2", "dht_r0": "#56B4E9", "app_cold": "#009E73",
+         "app_warm": "#9467BD", "tcp_scp": "#E69F00", "cold_restart": "#D55E00"}
+HATCH = {"dht_frl": "", "dht_r0": "//", "app_cold": "", "app_warm": "",
+         "tcp_scp": "", "cold_restart": "\\\\"}
+LS = {"dht_frl": "-", "dht_r0": (0, (5, 1)), "app_cold": "-.",
+      "app_warm": (0, (1, 1)), "tcp_scp": "--", "cold_restart": (0, (3, 1, 1, 1))}
+LAB = {"dht_frl": "DHT-FRL", "dht_r0": "DHT, no replica", "app_cold": "App-CR cold",
+       "app_warm": "App-CR warm", "tcp_scp": "App-CR direct (scp)",
        "cold_restart": "Cold restart"}
 KP = ["after_save", "mid_transfer", "after_transfer"]
 KP_LAB = {"after_save": "After save", "mid_transfer": "Mid-transfer",
@@ -61,8 +67,20 @@ def newest_runs(res_root):
     return runs
 
 
-def events(run):
+def all_events(run):
     return list(csv.DictReader(open(os.path.join(run, "migration_events.csv"))))
+
+
+def real_kill(r):
+    # kill_ok=0: the runner could not confirm it killed the source (e.g. it had
+    # already exited by itself) -> not a real source failure. Older CSVs
+    # without the column count as confirmed.
+    return str(r.get("kill_ok", "1")).strip() not in ("0", "0.0")
+
+
+def events(run):
+    """Events used in every figure and statistic: confirmed source kills only."""
+    return [r for r in all_events(run) if real_kill(r)]
 
 
 def num(r, k, default=np.nan):
@@ -134,13 +152,55 @@ def grouped_bars(ax, runs, value_fn, fmt, top):
     frame(ax)
 
 
+def is_stale(r):
+    return num(r, "restored_stale", 0) == 1
+
+
 def fig_state(runs, figdir):
+    """Fresh restores solid; stale (older pre-copy) restores stacked on top,
+    lighter and hatched, so they are never mistaken for a full recovery."""
+    from matplotlib.patches import Patch
+    conds = [c for c in ORDER if c in runs]
+    w = 0.8 / max(1, len(conds))
     fig, ax = plt.subplots(figsize=(9.4, 4.2))
-    grouped_bars(ax, runs, preserved_pct, lambda v: f"{v:.0f}", 100)
+    any_stale = False
+    for i, c in enumerate(conds):
+        rows = events(runs[c])
+        xs = np.arange(len(KP)) + (i - (len(conds) - 1) / 2) * w
+        fresh, stale = [], []
+        for kp in KP:
+            sel = [r for r in rows if r.get("kill_point") == kp]
+            n = len(sel) or np.nan
+            fresh.append(100.0 * sum(num(r, "restored", 0) == 1 and not is_stale(r)
+                                     for r in sel) / n)
+            stale.append(100.0 * sum(is_stale(r) for r in sel) / n)
+        f0 = [0 if np.isnan(v) else v for v in fresh]
+        s0 = [0 if np.isnan(v) else v for v in stale]
+        ax.bar(xs, f0, w, color=COLOR[c], hatch=HATCH[c], edgecolor="black",
+               linewidth=0.8, label=LAB[c], zorder=2)
+        if any(s0):
+            any_stale = True
+            ax.bar(xs, s0, w, bottom=f0, color=COLOR[c], alpha=0.45, hatch="xx",
+                   edgecolor="black", linewidth=0.8, zorder=2)
+        for x, fv, sv in zip(xs, fresh, stale):
+            if np.isnan(fv):
+                continue
+            txt = f"{fv:.0f}" if not sv else f"{fv:.0f}+{sv:.0f}"
+            ax.text(x, (fv + sv) + 2, txt, ha="center", va="bottom",
+                    fontsize=10 if len(conds) > 4 else 13)
+    ax.set_xticks(range(len(KP)))
+    ax.set_xticklabels([KP_LAB[k] for k in KP])
+    ax.set_xlabel("When the source was killed")
+    frame(ax)
     ax.set_ylabel("State preserved (%)")
-    ax.set_ylim(0, 150)          # headroom for a 2-row legend above the 100% bars
+    handles, labels = ax.get_legend_handles_labels()
+    if any_stale:
+        handles.append(Patch(facecolor="white", hatch="xx", edgecolor="black",
+                             label="stale pre-copy"))
+        labels.append("stale pre-copy")
+    ax.set_ylim(0, 165)          # headroom for a 3-row legend above the bars
     ax.set_yticks([0, 25, 50, 75, 100])
-    ax.legend(loc="upper center", ncol=2, **LEG)
+    ax.legend(handles, labels, loc="upper center", ncol=3, **LEG)
     save(fig, figdir, "exp1_state_preserved")
 
 
@@ -199,9 +259,15 @@ def print_summary(runs):
         if c not in runs:
             continue
         rows = events(runs[c])
+        bad = [r for r in all_events(runs[c]) if not real_kill(r)]
         m = meta(runs[c])
         print(f"\n=== {LAB[c]} ({c}): {len(rows)} migrations, run {os.path.basename(runs[c])}"
               f", replicas={m.get('replicas')}")
+        if bad:
+            print(f"  EXCLUDED {len(bad)} event(s) with kill_ok=0 (source kill not "
+                  f"confirmed): " + ", ".join(
+                      f"{r.get('robot_id')} round {r.get('fl_round')} ({r.get('kill_point')})"
+                      for r in bad))
         for kp in KP:
             sel = [r for r in rows if r.get("kill_point") == kp]
             if not sel:
@@ -213,7 +279,18 @@ def print_summary(runs):
             served = {}
             for r in sel:
                 served[r.get("served_by", "")] = served.get(r.get("served_by", ""), 0) + 1
-            print(f"  {kp:14s} n={len(sel):3d} state preserved {preserved_pct(sel):5.1f}% "
+            st_rows = [r for r in sel if is_stale(r)]
+            stale_txt = ""
+            if st_rows:
+                ages = [num(r, "stale_rounds") for r in st_rows]
+                ents = [num(r, "stale_replay_entries") for r in st_rows]
+                ages = [a for a in ages if not np.isnan(a)]
+                ents = [e for e in ents if not np.isnan(e)]
+                stale_txt = (f" (of which STALE pre-copy {len(st_rows)}: "
+                             f"~{st.median(ages) if ages else float('nan'):.0f} round(s), "
+                             f"~{st.median(ents) if ents else float('nan'):.0f} replay "
+                             f"entries old)")
+            print(f"  {kp:14s} n={len(sel):3d} state preserved {preserved_pct(sel):5.1f}%{stale_txt} "
                   f"| robot back {100 * len(back) / len(sel):5.1f}% "
                   f"| median downtime {st.median(dt) if dt else float('nan'):6.1f}s "
                   f"| replay restored ~{st.median(rep) if rep else 0:.0f} "
